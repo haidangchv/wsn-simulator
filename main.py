@@ -1,7 +1,12 @@
+from collections import Counter
 from pathlib import Path
-
+from visualization.topology import plot_network
 import yaml
 
+from topology.deployment import (
+    create_sink,
+    deploy_sensors,
+)
 
 def load_config():
     config_path = Path(__file__).parent / "config.yaml"
@@ -11,37 +16,48 @@ def load_config():
 
 
 def main():
+
     config = load_config()
 
     print("=== WSN Simulator ===")
 
-    print(
-        f"Area: "
-        f"{config['network']['width_m']} x "
-        f"{config['network']['height_m']} m"
+    sensors = deploy_sensors(config)
+    sink = create_sink(config)
+
+    print()
+    print("=== Network ===")
+
+    print(f"Number of sensors: {len(sensors)}")
+    print(f"Sink: {sink}")
+
+    print()
+    print("=== Sensor Types ===")
+
+    type_counter = Counter(
+        sensor.sensor_type
+        for sensor in sensors
     )
 
-    print(
-        f"Sensors: "
-        f"{config['network']['num_sensors']}"
+    for sensor_type, quantity in type_counter.items():
+        print(
+            f"{sensor_type}: "
+            f"{quantity}"
+        )
+
+    print()
+    print("=== First 10 Sensors ===")
+
+    for sensor in sensors[:10]:
+        print(sensor)
+
+    print()
+    print("=== Visualization ===")
+
+    plot_network(
+        sensors=sensors,
+        sink=sink,
+        config=config
     )
-
-    print(
-        f"Sink: "
-        f"({config['sink']['x']}, "
-        f"{config['sink']['y']})"
-    )
-
-    print(
-        f"Initial energy: "
-        f"{config['sensor']['initial_energy_j']} J"
-    )
-
-    print(
-        f"Transmission range: "
-        f"{config['sensor']['transmission_range_m']} m"
-    )
-
-
+    
 if __name__ == "__main__":
     main()
