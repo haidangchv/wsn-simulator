@@ -1,0 +1,33 @@
+project:
+  name: "WSN Simulator"
+  version: "0.1.0"
+
+network:
+  width_m: 2000
+  height_m: 2000
+  num_sensors: 500
+  random_seed: 42
+
+sink:
+  x: 1000
+  y: 1000
+
+sensor:
+  initial_energy_j: 2.0
+  transmission_range_m: 200
+  energy_threshold_ratio: 0.20
+
+packet:
+  payload_size_bytes: 128
+  sampling_interval_seconds: 10
+
+simulation:
+  mode: "round_based"
+  max_rounds: 10000
+
+sensor_types:
+  temperature: 100
+  humidity: 100
+  pm25: 100
+  wind: 100
+  water_quality: 100
