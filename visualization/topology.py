@@ -266,3 +266,215 @@ def plot_neighbor_graph(
 
     else:
         plt.close(fig)
+
+def plot_route(
+    sensors,
+    sink,
+    graph,
+    route,
+    config: dict,
+    show: bool = True,
+    save: bool = True
+):
+
+    if route is None:
+        print(
+            "Cannot plot route: "
+            "route does not exist."
+        )
+        return
+
+    fig, ax = plt.subplots(
+        figsize=(10, 10)
+    )
+
+    sensor_map = {
+        sensor.node_id: sensor
+        for sensor in sensors
+    }
+
+    # Background links
+    for node_a, node_b in graph.edges():
+
+        if node_a == sink.node_id:
+
+            x1, y1 = sink.x, sink.y
+
+        else:
+
+            sensor_a = sensor_map[node_a]
+
+            x1, y1 = (
+                sensor_a.x,
+                sensor_a.y
+            )
+
+        if node_b == sink.node_id:
+
+            x2, y2 = sink.x, sink.y
+
+        else:
+
+            sensor_b = sensor_map[node_b]
+
+            x2, y2 = (
+                sensor_b.x,
+                sensor_b.y
+            )
+
+        ax.plot(
+            [x1, x2],
+            [y1, y2],
+            linewidth=0.25,
+            alpha=0.06
+        )
+    
+    # All sensors
+    ax.scatter(
+        [sensor.x for sensor in sensors],
+        [sensor.y for sensor in sensors],
+        s=12,
+        alpha=0.35,
+        label="Sensors"
+    )
+
+    # Route positions
+    route_x = []
+    route_y = []
+
+    for node_id in route.path:
+
+        if node_id == sink.node_id:
+
+            route_x.append(sink.x)
+            route_y.append(sink.y)
+
+        else:
+
+            sensor = sensor_map[node_id]
+
+            route_x.append(sensor.x)
+            route_y.append(sensor.y)
+
+    # Highlight route
+    ax.plot(
+        route_x,
+        route_y,
+        linewidth=3,
+        marker="o",
+        markersize=6,
+        label="Minimum-Hop Route"
+    )
+
+    # Sink
+    ax.scatter(
+        sink.x,
+        sink.y,
+        marker="*",
+        s=280,
+        edgecolors="black",
+        label="Sink"
+    )
+
+    # Source
+    source_id = route.path[0]
+
+    if source_id != sink.node_id:
+
+        source = sensor_map[source_id]
+
+        ax.scatter(
+            source.x,
+            source.y,
+            marker="s",
+            s=100,
+            edgecolors="black",
+            label=f"Source {source_id}"
+        )
+
+    width = config["network"]["width_m"]
+    height = config["network"]["height_m"]
+
+    ax.set_xlim(
+        0,
+        width
+    )
+
+    ax.set_ylim(
+        0,
+        height
+    )
+
+    ax.set_xlabel(
+        "X (meters)"
+    )
+
+    ax.set_ylabel(
+        "Y (meters)"
+    )
+
+    ax.set_title(
+        f"Minimum-Hop Route "
+        f"(Sensor {source_id} -> Sink)"
+    )
+
+    ax.grid(
+        True,
+        alpha=0.2
+    )
+
+    ax.set_aspect(
+        "equal",
+        adjustable="box"
+    )
+
+    ax.legend()
+
+    plt.tight_layout()
+
+    for node_id, x, y in zip(
+        route.path,
+        route_x,
+        route_y
+    ):
+
+        ax.annotate(
+            str(node_id),
+            (x, y),
+            xytext=(5, 5),
+            textcoords="offset points",
+            fontsize=8
+        )
+        
+    if save:
+
+        output_dir = Path(
+            "outputs"
+        )
+
+        output_dir.mkdir(
+            exist_ok=True
+        )
+
+        output_path = (
+            output_dir
+            /
+            f"minimum_hop_route_"
+            f"sensor_{source_id}.png"
+        )
+
+        plt.savefig(
+            output_path,
+            dpi=200
+        )
+
+        print(
+            "Route visualization saved to: "
+            f"{output_path}"
+        )
+
+    if show:
+        plt.show()
+
+    else:
+        plt.close(fig)

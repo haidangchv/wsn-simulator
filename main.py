@@ -3,7 +3,11 @@ from collections import Counter
 from pathlib import Path
 from visualization.topology import (
     plot_network,
-    plot_neighbor_graph
+    plot_neighbor_graph,
+    plot_route
+)
+from visualization.routing import (
+    plot_hop_distribution
 )
 from core.network import WirelessSensorNetwork
 import yaml
@@ -160,5 +164,154 @@ def main():
         f"{sum(degrees) / len(degrees):.2f}"
     )
     
+    print()
+    print("=== Minimum-Hop Routing ===")
+
+    source_sensor_id = 1
+
+    route = network.find_minimum_hop_route(
+        source_sensor_id
+    )
+
+    if route is None:
+
+        print(
+            f"Sensor {source_sensor_id} "
+            f"has no route to sink."
+        )
+    else:
+        plot_route(
+            sensors=sensors,
+            sink=sink,
+            graph=network.graph,
+            route=route,
+            config=config
+        )
+        print(
+            f"Source sensor: "
+            f"{source_sensor_id}"
+        )
+
+        print(
+            "Route: "
+            +
+            " -> ".join(
+                str(node)
+                for node in route.path
+            )
+        )
+
+        print(
+            f"Hop count: "
+            f"{route.hop_count}"
+        )
+
+        print(
+            f"Total distance: "
+            f"{route.total_distance_m:.2f} m"
+        )
+
+    print()
+
+    valid_routes = {
+        sensor_id: route
+        for sensor_id, route
+        in all_routes.items()
+        if route is not None
+    }
+
+    farthest_sensor_id = max(
+        valid_routes,
+        key=lambda sensor_id:
+            valid_routes[
+                sensor_id
+            ].hop_count
+    )
+
+    farthest_route = (
+        valid_routes[
+            farthest_sensor_id
+        ]
+    )
+    plot_route(
+        sensors=sensors,
+        sink=sink,
+        graph=network.graph,
+        route=farthest_route,
+        config=config
+    )
+    print()
+    print("=== Maximum-Hop Sensor ===")
+
+    print(
+        f"Sensor: "
+        f"{farthest_sensor_id}"
+    )
+
+    print(
+        f"Hop count: "
+        f"{farthest_route.hop_count}"
+    )
+
+    print(
+        "Route: "
+        +
+        " -> ".join(
+            str(node)
+            for node in farthest_route.path
+        )
+    )
+
+    print("=== Global Routing Statistics ===")
+
+    routing_stats = (
+        network.minimum_hop_statistics()
+    )
+
+    print(
+        f"Routable sensors: "
+        f"{routing_stats['routable_sensors']}"
+    )
+
+    print(
+        f"Unroutable sensors: "
+        f"{routing_stats['unroutable_sensors']}"
+    )
+
+    print(
+        f"Minimum hop count: "
+        f"{routing_stats['minimum_hops']}"
+    )
+
+    print(
+        f"Maximum hop count: "
+        f"{routing_stats['maximum_hops']}"
+    )
+
+    if routing_stats["average_hops"] is not None:
+
+        print(
+            f"Average hop count: "
+            f"{routing_stats['average_hops']:.2f}"
+        )
+
+    if (
+        routing_stats["average_distance_m"]
+        is not None
+    ):
+
+        print(
+            f"Average route distance: "
+            f"{routing_stats['average_distance_m']:.2f} m"
+        )
+
+    all_routes = (
+        network.find_all_minimum_hop_routes()
+    )
+
+    plot_hop_distribution(
+        routes=all_routes
+    )
+
 if __name__ == "__main__":
     main()

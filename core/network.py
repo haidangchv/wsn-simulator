@@ -2,7 +2,12 @@ from dataclasses import dataclass, field
 from typing import List
 
 import networkx as nx
-
+from routing.minimum_hop import (
+    RouteResult,
+    calculate_route_statistics,
+    find_all_minimum_hop_routes,
+    find_minimum_hop_route
+)
 from core.sensor import SensorNode
 from core.sink import SinkNode
 from topology.neighbor_graph import build_neighbor_graph
@@ -16,6 +21,49 @@ class WirelessSensorNetwork:
     graph: nx.Graph = field(
         default_factory=nx.Graph
     )
+
+    def find_minimum_hop_route(
+        self,
+        source_id: int
+    ) -> RouteResult | None:
+        """
+        Find minimum-hop route from a
+        sensor node to sink.
+        """
+
+        return find_minimum_hop_route(
+            graph=self.graph,
+            source_id=source_id,
+            sink_id=self.sink.node_id
+        )
+
+    def find_all_minimum_hop_routes(self):
+        """
+        Find routes from all sensors to sink.
+        """
+        sensor_ids = [
+            sensor.node_id
+            for sensor in self.sensors
+        ]
+
+        return find_all_minimum_hop_routes(
+            graph=self.graph,
+            sensor_ids=sensor_ids,
+            sink_id=self.sink.node_id
+        )
+
+    def minimum_hop_statistics(self) -> dict:
+        """
+        Return global minimum-hop statistics.
+        """
+
+        routes = (
+            self.find_all_minimum_hop_routes()
+        )
+
+        return calculate_route_statistics(
+            routes
+        )
 
     def build_topology(self) -> None:
         """
@@ -117,6 +165,7 @@ class WirelessSensorNetwork:
 
         return connected / len(self.sensors)
 
+    
     def get_statistics(self) -> dict:
         """
         Return main topology statistics.
@@ -155,3 +204,5 @@ class WirelessSensorNetwork:
             "connectivity_ratio":
                 self.connectivity_ratio()
         }
+
+    
