@@ -23,6 +23,51 @@ class SensorNode:
     sent_packets: int = 0
     received_packets: int = 0
     forwarded_packets: int = 0
+    consumed_energy_j: float = 0.0
+
+    def consume_energy(
+        self,
+        amount_j: float,
+        energy_threshold_ratio: float
+    ) -> float:
+        """
+        Consume energy from sensor battery.
+
+        Returns the actual consumed energy.
+        """
+
+        if amount_j < 0:
+            raise ValueError(
+                "Energy consumption cannot be negative."
+            )
+
+        if self.remaining_energy <= 0:
+            self.update_state(
+                energy_threshold_ratio
+            )
+            return 0.0
+
+        actual_consumed = min(
+            amount_j,
+            self.remaining_energy
+        )
+
+        self.remaining_energy -= (
+            actual_consumed
+        )
+
+        self.consumed_energy_j += (
+            actual_consumed
+        )
+
+        if self.remaining_energy < 1e-15:
+            self.remaining_energy = 0.0
+
+        self.update_state(
+            energy_threshold_ratio
+        )
+
+        return actual_consumed
 
     def energy_ratio(self) -> float:
         if self.initial_energy <= 0:

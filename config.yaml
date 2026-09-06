@@ -12,6 +12,12 @@ sink:
   x: 1000
   y: 1000
 
+energy:
+  e_elec_nj_per_bit: 50
+  eps_fs_pj_per_bit_m2: 10
+  eps_mp_pj_per_bit_m4: 0.0013
+  per_hop_delay_ms: 10
+
 sensor:
   initial_energy_j: 2.0
   transmission_range_m: 200
