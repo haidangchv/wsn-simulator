@@ -115,6 +115,33 @@ class WSNSimulator:
 
         return graph
 
+    def find_current_route(
+        self,
+        source_id: int
+    ):
+        """
+        Find route using the current network state.
+        Dead nodes are excluded.
+        """
+
+        if source_id not in self.sensor_map:
+            return None
+
+        sensor = self.sensor_map[
+            source_id
+        ]
+
+        if not sensor.is_alive():
+            return None
+
+        graph = self._active_graph()
+
+        return find_minimum_hop_route(
+            graph=graph,
+            source_id=source_id,
+            sink_id=self.network.sink.node_id
+        )
+
     def _create_packet(
         self,
         source_id: int
