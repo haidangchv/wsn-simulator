@@ -1,10 +1,79 @@
 import plotly.graph_objects as go
 
 
+def build_edge_geometry(
+    network
+):
+
+    sensor_map = {
+        sensor.node_id: sensor
+        for sensor in network.sensors
+    }
+
+    sink = network.sink
+
+    edge_x = []
+    edge_y = []
+
+    for node_a, node_b in (
+        network.graph.edges()
+    ):
+
+        if node_a == sink.node_id:
+
+            x1 = sink.x
+            y1 = sink.y
+
+        else:
+
+            sensor = (
+                sensor_map[
+                    node_a
+                ]
+            )
+
+            x1 = sensor.x
+            y1 = sensor.y
+
+        if node_b == sink.node_id:
+
+            x2 = sink.x
+            y2 = sink.y
+
+        else:
+
+            sensor = (
+                sensor_map[
+                    node_b
+                ]
+            )
+
+            x2 = sensor.x
+            y2 = sensor.y
+
+        edge_x.extend([
+            x1,
+            x2,
+            None
+        ])
+
+        edge_y.extend([
+            y1,
+            y2,
+            None
+        ])
+
+    return (
+        edge_x,
+        edge_y
+    )
+
+
 def create_network_figure(
     network,
     route=None,
-    show_edges=True
+    show_edges=False,
+    edge_geometry=None
 ):
     """
     Create an interactive Plotly visualization
@@ -28,42 +97,39 @@ def create_network_figure(
 
     if show_edges:
 
-        edge_x = []
-        edge_y = []
+        if edge_geometry is None:
 
-        for node_a, node_b in graph.edges():
-
-            if node_a == sink.node_id:
-                x1, y1 = sink.x, sink.y
-            else:
-                sensor_a = sensor_map[node_a]
-                x1, y1 = sensor_a.x, sensor_a.y
-
-            if node_b == sink.node_id:
-                x2, y2 = sink.x, sink.y
-            else:
-                sensor_b = sensor_map[node_b]
-                x2, y2 = sensor_b.x, sensor_b.y
-
-            edge_x.extend(
-                [x1, x2, None]
+            edge_x, edge_y = (
+                build_edge_geometry(
+                    network
+                )
             )
 
-            edge_y.extend(
-                [y1, y2, None]
+        else:
+
+            edge_x, edge_y = (
+                edge_geometry
             )
 
         fig.add_trace(
             go.Scattergl(
                 x=edge_x,
                 y=edge_y,
+
                 mode="lines",
+
                 line=dict(
                     width=0.5,
-                    color="rgba(120,120,120,0.18)"
+                    color=(
+                        "rgba(120,120,120,0.18)"
+                    )
                 ),
+
                 hoverinfo="skip",
-                name="Communication links"
+
+                name=(
+                    "Communication links"
+                )
             )
         )
 

@@ -13,6 +13,7 @@ from topology.deployment import (
 )
 
 from streamlit_components.network_chart import (
+    build_edge_geometry,
     create_network_figure
 )
 from experiments.compare_routing import (
@@ -107,6 +108,23 @@ def initialize_session():
 
         st.session_state.simulator = (
             simulator
+        )
+
+        st.session_state.edge_geometry = (
+            build_edge_geometry(
+                network
+            )
+        )
+
+    if (
+        "edge_geometry" not in st.session_state
+        or st.session_state.edge_geometry is None
+    ):
+
+        st.session_state.edge_geometry = (
+            build_edge_geometry(
+                st.session_state.network
+            )
         )
 
     if "selected_route" not in (
@@ -298,6 +316,12 @@ if st.sidebar.button(
         simulator
     )
 
+    st.session_state.edge_geometry = (
+        build_edge_geometry(
+            network
+        )
+    )
+
     st.session_state.selected_route = (
         None
     )
@@ -326,6 +350,12 @@ if st.sidebar.button(
 
     st.session_state.simulator = (
         simulator
+    )
+
+    st.session_state.edge_geometry = (
+        build_edge_geometry(
+            network
+        )
     )
 
     st.session_state.selected_route = (
@@ -647,7 +677,10 @@ network_figure = (
     create_network_figure(
         network=network,
         route=route,
-        show_edges=show_edges
+        show_edges=show_edges,
+        edge_geometry=st.session_state.get(
+            "edge_geometry"
+        )
     )
 )
 
@@ -872,6 +905,62 @@ if (
         f"at round "
         f"{metrics['fnd_round']}."
     )
+
+
+# =========================================
+# ROUTING ENGINE PERFORMANCE
+# =========================================
+
+st.subheader(
+    "⚡ Routing Engine"
+)
+
+if hasattr(simulator, "route_manager"):
+
+    route_metrics = (
+        simulator.route_manager.get_metrics()
+    )
+
+else:
+
+    route_metrics = {
+        "route_table_builds": 0,
+        "routing_requests": 0,
+        "routing_reroutes": 0,
+        "route_cache_hit_ratio": 0.0
+    }
+
+rm1, rm2, rm3, rm4 = (
+    st.columns(4)
+)
+
+rm1.metric(
+    "Route Table Builds",
+    route_metrics[
+        "route_table_builds"
+    ]
+)
+
+rm2.metric(
+    "Route Requests",
+    route_metrics[
+        "routing_requests"
+    ]
+)
+
+rm3.metric(
+    "On-Demand Reroutes",
+    route_metrics[
+        "routing_reroutes"
+    ]
+)
+
+rm4.metric(
+    "Cache Hit Ratio",
+    (
+        f"{route_metrics['route_cache_hit_ratio'] * 100:.2f}%"
+    )
+)
 
 
 # =========================================

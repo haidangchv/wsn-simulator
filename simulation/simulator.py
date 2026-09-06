@@ -13,6 +13,9 @@ from energy.radio_model import (
 from routing.minimum_hop import (
     find_minimum_hop_route
 )
+from routing.route_manager import (
+    RouteManager
+)
 
 
 @dataclass
@@ -65,6 +68,12 @@ class WSNSimulator:
                 "emergency_threshold_ratio",
                 0.10
             )
+        )
+
+        self.route_manager = RouteManager(
+            network=self.network,
+            config=self.config,
+            algorithm=self.routing_algorithm
         )
 
         self.set_routing_algorithm(
@@ -170,6 +179,11 @@ class WSNSimulator:
         self.routing_algorithm = (
             algorithm
         )
+
+        if hasattr(self, "route_manager"):
+            self.route_manager.set_algorithm(
+                algorithm
+            )
 
 
     def find_current_route(
@@ -326,7 +340,7 @@ class WSNSimulator:
                 failed_node=source_id
             )
 
-        route = self.find_current_route(
+        route = self.route_manager.get_route(
             source_id
         )
 
@@ -541,6 +555,8 @@ class WSNSimulator:
 
         self.current_round += 1
 
+        self.route_manager.prepare_round()
+
         # Snapshot of nodes alive at beginning
         # of the round.
         source_ids = [
@@ -726,6 +742,10 @@ class WSNSimulator:
 
             energy_efficiency_bits_per_j = 0.0
 
+        routing_metrics = (
+            self.route_manager.get_metrics()
+        )
+
         return {
             "round":
                 self.current_round,
@@ -791,7 +811,32 @@ class WSNSimulator:
                 self.lnd_round,
 
             "routing_algorithm":
-                self.routing_algorithm
+                self.routing_algorithm,
+
+            "routing_requests":
+                routing_metrics[
+                    "routing_requests"
+                ],
+
+            "route_table_hits":
+                routing_metrics[
+                    "route_table_hits"
+                ],
+
+            "route_table_builds":
+                routing_metrics[
+                    "route_table_builds"
+                ],
+
+            "routing_reroutes":
+                routing_metrics[
+                    "routing_reroutes"
+                ],
+
+            "route_cache_hit_ratio":
+                routing_metrics[
+                    "route_cache_hit_ratio"
+                ]
         }
 
     def print_summary(self) -> None:

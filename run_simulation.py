@@ -1,7 +1,9 @@
 from pathlib import Path
 
 import yaml
-
+from experiments.benchmark_routing import (
+    benchmark_minimum_hop
+)
 from core.network import (
     WirelessSensorNetwork
 )
@@ -121,6 +123,9 @@ def main():
     plot_throughput(
         simulator.history
     )
+
+    result = benchmark_minimum_hop(network)
+    print(result)
 
 
 if __name__ == "__main__":
