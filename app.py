@@ -15,6 +15,9 @@ from topology.deployment import (
 from streamlit_components.network_chart import (
     create_network_figure
 )
+from experiments.compare_routing import (
+    compare_algorithms
+)
 
 
 # -----------------------------------------
@@ -84,7 +87,13 @@ def initialize_session():
             deepcopy(base_config)
         )
 
-    if "network" not in st.session_state:
+    if (
+        "network" not in st.session_state
+        or "simulator" not in st.session_state
+        or not hasattr(st.session_state.simulator, "find_current_route")
+        or not hasattr(st.session_state.simulator, "set_routing_algorithm")
+        or type(st.session_state.simulator) is not WSNSimulator
+    ):
 
         network, simulator = (
             create_simulation(
@@ -334,6 +343,88 @@ simulator = (
     st.session_state.simulator
 )
 
+if not hasattr(simulator, "find_current_route"):
+    import types
+    simulator.find_current_route = types.MethodType(
+        WSNSimulator.find_current_route,
+        simulator
+    )
+
+if not hasattr(simulator, "set_routing_algorithm"):
+    import types
+    simulator.set_routing_algorithm = types.MethodType(
+        WSNSimulator.set_routing_algorithm,
+        simulator
+    )
+
+st.sidebar.divider()
+
+st.sidebar.subheader(
+    "🧭 Routing"
+)
+
+routing_options = {
+    "Minimum-Hop BFS":
+        "minimum_hop",
+
+    "ECMHR":
+        "ecmhr"
+}
+
+current_algorithm = getattr(
+    simulator,
+    "routing_algorithm",
+    "minimum_hop"
+)
+
+current_label = next(
+    (
+        label
+        for label, value
+        in routing_options.items()
+        if value == current_algorithm
+    ),
+    "Minimum-Hop BFS"
+)
+
+selected_label = (
+    st.sidebar.selectbox(
+        "Routing Algorithm",
+        options=list(
+            routing_options.keys()
+        ),
+        index=list(
+            routing_options.keys()
+        ).index(
+            current_label
+        )
+    )
+)
+
+selected_algorithm = (
+    routing_options[
+        selected_label
+    ]
+)
+
+if (
+    selected_algorithm
+    != getattr(simulator, "routing_algorithm", None)
+):
+
+    if hasattr(simulator, "set_routing_algorithm"):
+        simulator.set_routing_algorithm(
+            selected_algorithm
+        )
+    else:
+        simulator.routing_algorithm = (
+            selected_algorithm
+        )
+
+    st.session_state.selected_route = (
+        None
+    )
+
 
 # =========================================
 # NETWORK STATISTICS
@@ -403,8 +494,18 @@ else:
 # ROUTING
 # =========================================
 
+algorithm_name = (
+    "ECMHR"
+    if getattr(
+        simulator,
+        "routing_algorithm",
+        "minimum_hop"
+    ) == "ecmhr"
+    else "Minimum-Hop BFS"
+)
+
 st.subheader(
-    "🧭 Minimum-Hop Routing"
+    f"🧭 Routing — {algorithm_name}"
 )
 
 route_col1, route_col2 = (
@@ -430,11 +531,24 @@ with route_col1:
         use_container_width=True
     ):
 
-        st.session_state.selected_route = (
-            simulator.find_current_route(
-                selected_source
+        if hasattr(
+            simulator,
+            "find_current_route"
+        ):
+
+            st.session_state.selected_route = (
+                simulator.find_current_route(
+                    selected_source
+                )
             )
-        )
+
+        else:
+
+            st.session_state.selected_route = (
+                network.find_minimum_hop_route(
+                    selected_source
+                )
+            )
 
 
 route = (
@@ -446,12 +560,40 @@ with route_col2:
 
     if route is not None:
 
+        path_elements = []
+        low_energy_relays = []
+
+        for idx, node in enumerate(route.path):
+
+            if node == network.sink.node_id:
+                path_elements.append("SINK 🎯")
+
+            else:
+                sensor = network.get_sensor(node)
+
+                if sensor.state == "LOW_ENERGY":
+                    path_elements.append(
+                        f"S{node} 🟡 ({sensor.remaining_energy:.2f}J)"
+                    )
+                    if idx > 0:
+                        low_energy_relays.append(node)
+
+                elif sensor.state == "DEAD":
+                    path_elements.append(f"S{node} 🔴")
+
+                else:
+                    path_elements.append(f"S{node}")
+
         st.success(
-            " → ".join(
-                str(node)
-                for node in route.path
-            )
+            " → ".join(path_elements)
         )
+
+        if low_energy_relays:
+            st.warning(
+                f"⚠️ Route traverses {len(low_energy_relays)} LOW_ENERGY relay(s): "
+                f"{', '.join(f'Sensor {n}' for n in low_energy_relays)}. "
+                "Switch to ECMHR to reroute and protect low-battery nodes!"
+            )
 
         r1, r2 = st.columns(2)
 
@@ -464,6 +606,30 @@ with route_col2:
             "Route Distance",
             f"{route.total_distance_m:.2f} m"
         )
+
+        if hasattr(
+            route,
+            "bottleneck_energy_j"
+        ):
+
+            if (
+                route.bottleneck_energy_j
+                is not None
+            ):
+
+                st.metric(
+                    "Route Bottleneck Energy",
+                    (
+                        f"{route.bottleneck_energy_j:.4f} J"
+                    )
+                )
+
+            if route.emergency_mode:
+
+                st.warning(
+                    "This route is using ECMHR "
+                    "Emergency Mode."
+                )
 
     else:
 
@@ -894,6 +1060,65 @@ if simulator.history:
         st.line_chart(
             throughput_chart
         )
+
+
+# =========================================
+# ROUTING COMPARISON
+# =========================================
+
+st.divider()
+
+st.subheader(
+    "⚖️ Routing Algorithm Comparison"
+)
+
+comparison_rounds = (
+    st.number_input(
+        "Comparison rounds",
+        min_value=10,
+        max_value=500,
+        value=100,
+        step=10
+    )
+)
+
+if st.button(
+    "Compare Minimum-Hop vs ECMHR"
+):
+
+    with st.spinner(
+        "Running routing comparison..."
+    ):
+
+        comparison_df = (
+            compare_algorithms(
+                config=(
+                    st.session_state.config
+                ),
+                rounds=int(
+                    comparison_rounds
+                )
+            )
+        )
+
+    display_columns = [
+        "algorithm",
+        "alive_nodes",
+        "dead_nodes",
+        "pdr",
+        "average_hop_count",
+        "total_energy_consumed_j",
+        "energy_efficiency_bits_per_j",
+        "fnd_round"
+    ]
+
+    st.dataframe(
+        comparison_df[
+            display_columns
+        ],
+        use_container_width=True,
+        hide_index=True
+    )
 
 
 # =========================================

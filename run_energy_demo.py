@@ -62,45 +62,62 @@ def main():
         config=config
     )
 
-    simulator.run(
-        rounds=100
+    simulator.set_routing_algorithm(
+        "ecmhr"
     )
 
-    simulator.print_summary()
-    paths = export_simulation_results(simulator)
-    print()
-    print("Results exported:")
+    source_id = 1
 
-    for name, path in paths.items():
+    route_before = (
+        simulator.find_current_route(
+            source_id
+        )
+    )
+
+    print(
+        "Route before:",
+        route_before
+    )
+
+    if (
+        route_before is not None
+        and
+        len(route_before.path) > 2
+    ):
+
+        relay_id = (
+            route_before.path[1]
+        )
+
+        relay = (
+            network.get_sensor(
+                relay_id
+            )
+        )
+
+        relay.remaining_energy = 0.30
+
+        relay.update_state(
+            config["sensor"][
+                "energy_threshold_ratio"
+            ]
+        )
 
         print(
-            f"{name}: {path}"
+            f"Forced Sensor {relay_id} "
+            f"to LOW_ENERGY"
         )
-    history = simulator.history
 
-    plot_alive_nodes(
-        history,
-        show=True,
-        save=True
-    )
+        route_after = (
+            simulator.find_current_route(
+                source_id
+            )
+        )
 
-    plot_remaining_energy(
-        history,
-        show=True,
-        save=True
-    )
-
-    plot_pdr(
-        history,
-        show=True,
-        save=True
-    )
-
-    plot_throughput(
-        history,
-        show=True,
-        save=True
-    )
+        print(
+            "Route after:",
+            route_after
+        )
     
 
 

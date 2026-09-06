@@ -1,7 +1,8 @@
-from networkx.generators import spectral_graph_forge
 from dataclasses import dataclass
 from math import ceil
-
+from routing.ecmhr import (
+    find_ecmhr_route
+)
 import networkx as nx
 
 from core.network import WirelessSensorNetwork
@@ -30,11 +31,45 @@ class WSNSimulator:
     def __init__(
         self,
         network: WirelessSensorNetwork,
-        config: dict
+        config: dict,
+        routing_algorithm: str | None = None
     ):
 
         self.network = network
         self.config = config
+
+        routing_config = (
+            config.get(
+                "routing",
+                {}
+            )
+        )
+
+        self.routing_algorithm = (
+            routing_algorithm
+            or routing_config.get(
+                "algorithm",
+                "minimum_hop"
+            )
+        )
+
+        self.allow_emergency_mode = (
+            routing_config.get(
+                "allow_emergency_mode",
+                False
+            )
+        )
+
+        self.emergency_threshold_ratio = (
+            routing_config.get(
+                "emergency_threshold_ratio",
+                0.10
+            )
+        )
+
+        self.set_routing_algorithm(
+            self.routing_algorithm
+        )
 
         self.radio = (
             RadioEnergyModel.from_config(
@@ -115,32 +150,88 @@ class WSNSimulator:
 
         return graph
 
+    def set_routing_algorithm(
+        self,
+        algorithm: str
+    ) -> None:
+
+        supported = {
+            "minimum_hop",
+            "ecmhr"
+        }
+
+        if algorithm not in supported:
+
+            raise ValueError(
+                f"Unsupported routing algorithm: "
+                f"{algorithm}"
+            )
+
+        self.routing_algorithm = (
+            algorithm
+        )
+
+
     def find_current_route(
         self,
         source_id: int
     ):
-        """
-        Find route using the current network state.
-        Dead nodes are excluded.
-        """
 
         if source_id not in self.sensor_map:
             return None
 
-        sensor = self.sensor_map[
+        source = self.sensor_map[
             source_id
         ]
 
-        if not sensor.is_alive():
+        if not source.is_alive():
             return None
 
-        graph = self._active_graph()
+        if (
+            self.routing_algorithm
+            == "minimum_hop"
+        ):
 
-        return find_minimum_hop_route(
-            graph=graph,
-            source_id=source_id,
-            sink_id=self.network.sink.node_id
-        )
+            graph = self._active_graph()
+
+            return find_minimum_hop_route(
+                graph=graph,
+                source_id=source_id,
+                sink_id=(
+                    self.network.sink.node_id
+                )
+            )
+
+        if (
+            self.routing_algorithm
+            == "ecmhr"
+        ):
+
+            return find_ecmhr_route(
+                graph=self.network.graph,
+
+                sensor_map=self.sensor_map,
+
+                source_id=source_id,
+
+                sink_id=(
+                    self.network.sink.node_id
+                ),
+
+                energy_threshold_ratio=(
+                    self.energy_threshold_ratio
+                ),
+
+                allow_emergency_mode=(
+                    self.allow_emergency_mode
+                ),
+
+                emergency_threshold_ratio=(
+                    self.emergency_threshold_ratio
+                )
+            )
+
+        return None
 
     def _create_packet(
         self,
@@ -235,12 +326,8 @@ class WSNSimulator:
                 failed_node=source_id
             )
 
-        graph = self._active_graph()
-
-        route = find_minimum_hop_route(
-            graph=graph,
-            source_id=source_id,
-            sink_id=self.network.sink.node_id
+        route = self.find_current_route(
+            source_id
         )
 
         if route is None:
@@ -273,7 +360,7 @@ class WSNSimulator:
             )
 
             distance = (
-                graph[
+                self.network.graph[
                     sender_id
                 ][
                     receiver_id
@@ -701,7 +788,10 @@ class WSNSimulator:
                 self.hnd_round,
 
             "lnd_round":
-                self.lnd_round
+                self.lnd_round,
+
+            "routing_algorithm":
+                self.routing_algorithm
         }
 
     def print_summary(self) -> None:

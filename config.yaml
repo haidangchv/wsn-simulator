@@ -31,6 +31,12 @@ simulation:
   mode: "round_based"
   max_rounds: 10000
 
+routing:
+  algorithm: "minimum_hop"
+
+  allow_emergency_mode: false
+  emergency_threshold_ratio: 0.10
+
 sensor_types:
   temperature: 100
   humidity: 100
