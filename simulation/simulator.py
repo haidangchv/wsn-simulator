@@ -1,3 +1,4 @@
+from networkx.generators import spectral_graph_forge
 from dataclasses import dataclass
 from math import ceil
 
@@ -74,7 +75,16 @@ class WSNSimulator:
         self.delivered_bytes = 0
 
         self.total_energy_consumed_j = 0.0
+        self.total_delay_ms = 0.0
+        self.total_delivered_hops = 0
 
+        self.sampling_interval_seconds = (
+            config["packet"][
+                "sampling_interval_seconds"
+            ]
+        )
+
+        self.history = []
         self.fnd_round = None
         self.hnd_round = None
         self.lnd_round = None
@@ -385,6 +395,14 @@ class WSNSimulator:
             * self.per_hop_delay_ms
         )
 
+        self.total_delay_ms += (
+            packet.delay_ms
+        )
+
+        self.total_delivered_hops += (
+            packet.hop_count
+        )
+
         self.delivered_packets += 1
 
         self.delivered_bytes += (
@@ -432,6 +450,8 @@ class WSNSimulator:
             )
 
         self._update_lifetime_metrics()
+
+        self._record_history()
 
     def _update_lifetime_metrics(
         self
@@ -486,35 +506,124 @@ class WSNSimulator:
 
             self.run_round()
 
+    def _record_history(self) -> None:
+        """
+        Store a snapshot of cumulative metrics
+        after the current round.
+        """
+
+        snapshot = self.get_metrics().copy()
+
+        self.history.append(
+            snapshot
+        )
+
     def get_metrics(self) -> dict:
 
+        total_nodes = len(
+            self.network.sensors
+        )
+
         alive = sum(
-            sensor.is_alive()
+            1
+            for sensor in self.network.sensors
+            if sensor.is_alive()
+        )
+
+        dead = total_nodes - alive
+
+        low_energy = sum(
+            1
+            for sensor in self.network.sensors
+            if sensor.state == "LOW_ENERGY"
+        )
+
+        total_remaining_energy = sum(
+            sensor.remaining_energy
             for sensor in self.network.sensors
         )
 
-        dead = (
-            len(self.network.sensors)
-            - alive
+        average_remaining_energy = (
+            total_remaining_energy / total_nodes
+            if total_nodes > 0
+            else 0.0
         )
+
+        elapsed_seconds = (
+            self.current_round
+            * self.sampling_interval_seconds
+        )
+
+        # Packet Delivery Ratio
 
         if self.generated_packets > 0:
 
             pdr = (
                 self.delivered_packets
-                /
-                self.generated_packets
+                / self.generated_packets
             )
 
         else:
             pdr = 0.0
 
+        # Throughput at Sink
+
+        if elapsed_seconds > 0:
+
+            throughput_bps = (
+                self.delivered_bytes
+                * 8
+                / elapsed_seconds
+            )
+
+        else:
+            throughput_bps = 0.0
+
+        # Average End-to-End Delay
+
+        if self.delivered_packets > 0:
+
+            average_delay_ms = (
+                self.total_delay_ms
+                / self.delivered_packets
+            )
+
+            average_hop_count = (
+                self.total_delivered_hops
+                / self.delivered_packets
+            )
+
+        else:
+
+            average_delay_ms = 0.0
+            average_hop_count = 0.0
+
+        # Useful bits delivered / Joule consumed
+
+        if self.total_energy_consumed_j > 0:
+
+            energy_efficiency_bits_per_j = (
+                self.delivered_bytes
+                * 8
+                / self.total_energy_consumed_j
+            )
+
+        else:
+
+            energy_efficiency_bits_per_j = 0.0
+
         return {
             "round":
                 self.current_round,
 
+            "elapsed_seconds":
+                elapsed_seconds,
+
             "alive_nodes":
                 alive,
+
+            "low_energy_nodes":
+                low_energy,
 
             "dead_nodes":
                 dead,
@@ -537,8 +646,26 @@ class WSNSimulator:
             "pdr":
                 pdr,
 
+            "throughput_bps":
+                throughput_bps,
+
+            "average_delay_ms":
+                average_delay_ms,
+
+            "average_hop_count":
+                average_hop_count,
+
             "total_energy_consumed_j":
                 self.total_energy_consumed_j,
+
+            "total_remaining_energy_j":
+                total_remaining_energy,
+
+            "average_remaining_energy_j":
+                average_remaining_energy,
+
+            "energy_efficiency_bits_per_j":
+                energy_efficiency_bits_per_j,
 
             "fnd_round":
                 self.fnd_round,
@@ -549,3 +676,114 @@ class WSNSimulator:
             "lnd_round":
                 self.lnd_round
         }
+
+    def print_summary(self) -> None:
+
+        metrics = self.get_metrics()
+
+        print()
+        print("=" * 50)
+        print("WSN SIMULATION SUMMARY")
+        print("=" * 50)
+
+        print(
+            f"Round: "
+            f"{metrics['round']}"
+        )
+
+        print(
+            f"Simulation time: "
+            f"{metrics['elapsed_seconds']:.0f} s"
+        )
+
+        print()
+
+        print(
+            f"Alive nodes: "
+            f"{metrics['alive_nodes']}"
+        )
+
+        print(
+            f"Low-energy nodes: "
+            f"{metrics['low_energy_nodes']}"
+        )
+
+        print(
+            f"Dead nodes: "
+            f"{metrics['dead_nodes']}"
+        )
+
+        print()
+
+        print(
+            f"Generated packets: "
+            f"{metrics['generated_packets']}"
+        )
+
+        print(
+            f"Delivered packets: "
+            f"{metrics['delivered_packets']}"
+        )
+
+        print(
+            f"Dropped packets: "
+            f"{metrics['dropped_packets']}"
+        )
+
+        print(
+            f"PDR: "
+            f"{metrics['pdr'] * 100:.2f}%"
+        )
+
+        print()
+
+        print(
+            f"Throughput: "
+            f"{metrics['throughput_bps'] / 1000:.2f} kbps"
+        )
+
+        print(
+            f"Average delay: "
+            f"{metrics['average_delay_ms']:.2f} ms"
+        )
+
+        print(
+            f"Average hop count: "
+            f"{metrics['average_hop_count']:.2f}"
+        )
+
+        print()
+
+        print(
+            f"Energy consumed: "
+            f"{metrics['total_energy_consumed_j']:.4f} J"
+        )
+
+        print(
+            f"Energy remaining: "
+            f"{metrics['total_remaining_energy_j']:.4f} J"
+        )
+
+        print(
+            f"Energy efficiency: "
+            f"{metrics['energy_efficiency_bits_per_j']:.2f} bit/J"
+        )
+
+        print()
+
+        print(
+            f"FND: "
+            f"{metrics['fnd_round']}"
+        )
+
+        print(
+            f"HND: "
+            f"{metrics['hnd_round']}"
+        )
+
+        print(
+            f"LND: "
+            f"{metrics['lnd_round']}"
+        )
+
+        print("=" * 50)

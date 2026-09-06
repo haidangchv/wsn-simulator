@@ -1,7 +1,9 @@
 from pathlib import Path
 
 import yaml
-
+from metrics.evaluator import (
+    export_simulation_results
+)
 from core.network import (
     WirelessSensorNetwork
 )
@@ -11,6 +13,12 @@ from topology.deployment import (
 )
 from simulation.simulator import (
     WSNSimulator
+)
+from visualization.energy import (
+    plot_alive_nodes,
+    plot_pdr,
+    plot_remaining_energy,
+    plot_throughput
 )
 
 
@@ -54,60 +62,46 @@ def main():
         config=config
     )
 
-    max_rounds = (
-        config["simulation"][
-            "max_rounds"
-        ]
+    simulator.run(
+        rounds=100
     )
 
-    while (
-        simulator.fnd_round is None
-        and
-        simulator.current_round
-        < max_rounds
-    ):
+    simulator.print_summary()
+    paths = export_simulation_results(simulator)
+    print()
+    print("Results exported:")
 
-        simulator.run_round()
-
-        if (
-            simulator.current_round
-            % 100 == 0
-        ):
-
-            metrics = (
-                simulator.get_metrics()
-            )
-
-            print(
-                f"Round "
-                f"{simulator.current_round}: "
-                f"Alive="
-                f"{metrics['alive_nodes']}"
-            )
-
-    print(
-        "FND:",
-        simulator.fnd_round
-    )
-
-    dead_nodes = [
-        sensor
-        for sensor in sensors
-        if not sensor.is_alive()
-    ]
-
-    print(
-        "Dead sensors:"
-    )
-
-    for sensor in dead_nodes:
+    for name, path in paths.items():
 
         print(
-            sensor.node_id,
-            sensor.x,
-            sensor.y,
-            sensor.consumed_energy_j
+            f"{name}: {path}"
         )
+    history = simulator.history
+
+    plot_alive_nodes(
+        history,
+        show=True,
+        save=True
+    )
+
+    plot_remaining_energy(
+        history,
+        show=True,
+        save=True
+    )
+
+    plot_pdr(
+        history,
+        show=True,
+        save=True
+    )
+
+    plot_throughput(
+        history,
+        show=True,
+        save=True
+    )
+    
 
 
 if __name__ == "__main__":
