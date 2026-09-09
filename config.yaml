@@ -29,7 +29,7 @@ packet:
 
 simulation:
   mode: "round_based"
-  max_rounds: 10000
+  max_rounds: 1000
 
 routing:
   algorithm: "minimum_hop"
@@ -43,3 +43,44 @@ sensor_types:
   pm25: 100
   wind: 100
   water_quality: 100
+
+environment:
+  enabled: true
+
+  temporal_period_rounds: 144
+  temporal_smoothing: 0.85
+
+  noise:
+    temperature: 0.15
+    humidity: 0.40
+    pm25: 1.20
+    wind: 0.12
+    water_quality: 0.40
+
+  bounds:
+    temperature:
+      min: 18.0
+      max: 45.0
+
+    humidity:
+      min: 20.0
+      max: 100.0
+
+    pm25:
+      min: 0.0
+      max: 200.0
+
+    wind:
+      min: 0.0
+      max: 15.0
+
+    water_quality:
+      min: 0.0
+      max: 100.0
+
+  zones:
+    zone_size_m: 200
+
+  interpolation:
+    method: "idw"
+    power: 2

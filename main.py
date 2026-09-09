@@ -213,6 +213,10 @@ def main():
 
     print()
 
+    all_routes = (
+        network.find_all_minimum_hop_routes()
+    )
+
     valid_routes = {
         sensor_id: route
         for sensor_id, route
@@ -304,10 +308,6 @@ def main():
             f"Average route distance: "
             f"{routing_stats['average_distance_m']:.2f} m"
         )
-
-    all_routes = (
-        network.find_all_minimum_hop_routes()
-    )
 
     plot_hop_distribution(
         routes=all_routes

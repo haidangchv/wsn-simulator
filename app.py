@@ -2,6 +2,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 import yaml
 
@@ -132,6 +133,30 @@ def initialize_session():
     ):
 
         st.session_state.selected_route = (
+            None
+        )
+
+    if "find_route_searched" not in (
+        st.session_state
+    ):
+
+        st.session_state.find_route_searched = (
+            False
+        )
+
+    if "source_sensor_select" not in (
+        st.session_state
+    ):
+
+        st.session_state.source_sensor_select = (
+            1
+        )
+
+    if "last_processed_map_click" not in (
+        st.session_state
+    ):
+
+        st.session_state.last_processed_map_click = (
             None
         )
 
@@ -325,6 +350,15 @@ if st.sidebar.button(
     st.session_state.selected_route = (
         None
     )
+    st.session_state.find_route_searched = (
+        False
+    )
+    st.session_state.last_processed_map_click = (
+        None
+    )
+    st.session_state.source_sensor_select = (
+        1
+    )
 
     st.rerun()
 
@@ -360,6 +394,15 @@ if st.sidebar.button(
 
     st.session_state.selected_route = (
         None
+    )
+    st.session_state.find_route_searched = (
+        False
+    )
+    st.session_state.last_processed_map_click = (
+        None
+    )
+    st.session_state.source_sensor_select = (
+        1
     )
 
     st.rerun()
@@ -454,6 +497,64 @@ if (
     st.session_state.selected_route = (
         None
     )
+    st.session_state.find_route_searched = (
+        False
+    )
+
+if (
+    getattr(simulator, "routing_algorithm", "minimum_hop")
+    == "ecmhr"
+):
+
+    st.sidebar.subheader(
+        "🚨 ECMHR Emergency Mode"
+    )
+
+    emergency_enabled = (
+        st.sidebar.checkbox(
+            "Allow Emergency Routing",
+            value=getattr(
+                simulator,
+                "allow_emergency_mode",
+                False
+            )
+        )
+    )
+
+    emergency_threshold = (
+        st.sidebar.slider(
+            "Emergency Threshold (%)",
+            min_value=1,
+            max_value=19,
+            value=int(
+                getattr(
+                    simulator,
+                    "emergency_threshold_ratio",
+                    0.10
+                )
+                * 100
+            )
+        )
+    )
+
+    simulator.allow_emergency_mode = (
+        emergency_enabled
+    )
+
+    simulator.emergency_threshold_ratio = (
+        emergency_threshold / 100
+    )
+
+    if hasattr(simulator, "route_manager"):
+
+        simulator.route_manager.allow_emergency_mode = (
+            emergency_enabled
+        )
+
+        simulator.route_manager.emergency_threshold_ratio = (
+            emergency_threshold / 100
+        )
+
 
 
 # =========================================
@@ -551,15 +652,67 @@ with route_col1:
         for sensor in network.sensors
     ]
 
+    # Handle map point click selection
+    map_event = st.session_state.get("network_map")
+    if map_event and isinstance(map_event, dict):
+        selection = map_event.get("selection", {})
+        points = selection.get("points", [])
+        if points:
+            last_pt = points[-1]
+            cdata = last_pt.get("customdata")
+            if isinstance(cdata, (list, tuple)) and len(cdata) > 0:
+                cdata = cdata[0]
+            if cdata is not None and cdata != "SINK":
+                try:
+                    cand_id = int(cdata)
+                    if cand_id in sensor_ids:
+                        click_sig = (
+                            cand_id,
+                            last_pt.get("curve_number"),
+                            last_pt.get("point_index"),
+                            last_pt.get("x"),
+                            last_pt.get("y")
+                        )
+                        if click_sig != st.session_state.get("last_processed_map_click"):
+                            st.session_state.last_processed_map_click = click_sig
+                            st.session_state.source_sensor_select = cand_id
+                            st.session_state.find_route_searched = True
+                            st.session_state.last_searched_source = cand_id
+                            if hasattr(simulator, "find_current_route"):
+                                st.session_state.selected_route = (
+                                    simulator.find_current_route(cand_id)
+                                )
+                            else:
+                                st.session_state.selected_route = (
+                                    network.find_minimum_hop_route(cand_id)
+                                )
+                except (ValueError, TypeError):
+                    pass
+
+    if st.session_state.get("source_sensor_select") not in sensor_ids:
+        st.session_state.source_sensor_select = (
+            sensor_ids[0] if sensor_ids else 1
+        )
+
     selected_source = st.selectbox(
         "Source Sensor",
-        sensor_ids
+        sensor_ids,
+        key="source_sensor_select"
     )
+
+    st.caption("💡 Click on any node on the map to auto-select and find route")
 
     if st.button(
         "Find Route",
         use_container_width=True
     ):
+
+        st.session_state.find_route_searched = (
+            True
+        )
+        st.session_state.last_searched_source = (
+            selected_source
+        )
 
         if hasattr(
             simulator,
@@ -590,6 +743,16 @@ with route_col2:
 
     if route is not None:
 
+        if getattr(
+            route,
+            "emergency_mode",
+            False
+        ):
+            st.warning(
+                "⚠️ No normal ECMHR route was available. "
+                "The network is using Emergency Routing."
+            )
+
         path_elements = []
         low_energy_relays = []
 
@@ -618,14 +781,26 @@ with route_col2:
             " → ".join(path_elements)
         )
 
-        if low_energy_relays:
+        threshold_used = getattr(
+            route,
+            "threshold_ratio_used",
+            None
+        )
+
+        if threshold_used is not None:
+            st.caption(
+                f"Relay energy threshold used: "
+                f"{threshold_used * 100:.0f}%"
+            )
+
+        if low_energy_relays and not getattr(route, "emergency_mode", False):
             st.warning(
                 f"⚠️ Route traverses {len(low_energy_relays)} LOW_ENERGY relay(s): "
                 f"{', '.join(f'Sensor {n}' for n in low_energy_relays)}. "
                 "Switch to ECMHR to reroute and protect low-battery nodes!"
             )
 
-        r1, r2 = st.columns(2)
+        r1, r2, r3 = st.columns(3)
 
         r1.metric(
             "Hop Count",
@@ -637,29 +812,43 @@ with route_col2:
             f"{route.total_distance_m:.2f} m"
         )
 
-        if hasattr(
+        bottleneck_val = getattr(
             route,
-            "bottleneck_energy_j"
-        ):
+            "bottleneck_energy_j",
+            None
+        )
 
-            if (
-                route.bottleneck_energy_j
-                is not None
-            ):
+        if bottleneck_val is not None:
+            r3.metric(
+                "Bottleneck Energy",
+                f"{bottleneck_val:.4f} J"
+            )
+        else:
+            r3.metric(
+                "Bottleneck Energy",
+                "N/A"
+            )
 
-                st.metric(
-                    "Route Bottleneck Energy",
-                    (
-                        f"{route.bottleneck_energy_j:.4f} J"
-                    )
+    elif st.session_state.get("find_route_searched", False):
+
+        searched_source = st.session_state.get(
+            "last_searched_source",
+            selected_source
+        )
+
+        if getattr(simulator, "routing_algorithm", "minimum_hop") == "ecmhr":
+            st.error(
+                f"❌ No valid ECMHR route found for Sensor {searched_source} to Sink! "
+                "All relay paths to the Sink are blocked by LOW_ENERGY (≤ 20%) or DEAD nodes."
+            )
+            if not getattr(simulator, "allow_emergency_mode", False):
+                st.info(
+                    "💡 Tip: Enable **'Allow Emergency Routing'** in the sidebar to permit routing through relays with lower remaining energy."
                 )
-
-            if route.emergency_mode:
-
-                st.warning(
-                    "This route is using ECMHR "
-                    "Emergency Mode."
-                )
+        else:
+            st.error(
+                f"❌ No route found from Sensor {searched_source} to Sink."
+            )
 
     else:
 
@@ -686,7 +875,10 @@ network_figure = (
 
 st.plotly_chart(
     network_figure,
-    use_container_width=True
+    use_container_width=True,
+    key="network_map",
+    on_select="rerun",
+    selection_mode="points"
 )
 
 
@@ -722,6 +914,8 @@ with run1:
             )
 
         st.session_state.selected_route = None
+        st.session_state.find_route_searched = False
+        st.rerun()
 
 
 with run10:
@@ -740,6 +934,8 @@ with run10:
             )
 
         st.session_state.selected_route = None
+        st.session_state.find_route_searched = False
+        st.rerun()
 
 
 with run50:
@@ -758,6 +954,8 @@ with run50:
             )
 
         st.session_state.selected_route = None
+        st.session_state.find_route_searched = False
+        st.rerun()
 
 
 with run_custom:
@@ -788,6 +986,8 @@ with run_custom:
             )
 
         st.session_state.selected_route = None
+        st.session_state.find_route_searched = False
+        st.rerun()
 
 
 # =========================================
@@ -1276,3 +1476,229 @@ with st.expander(
         use_container_width=True,
         hide_index=True
     )
+
+
+# =========================================
+# ENVIRONMENTAL MONITORING
+# =========================================
+
+st.divider()
+
+st.subheader(
+    "🌿 Environmental Monitoring"
+)
+
+collector = getattr(
+    simulator,
+    "environment_collector",
+    None
+)
+
+if (
+    collector is None
+    or
+    not collector.received_records
+):
+
+    st.info(
+        "Run the simulation to collect "
+        "environmental sensor data."
+    )
+
+else:
+
+    environmental_df = (
+        collector.received_dataframe()
+    )
+
+    sensor_type = (
+        st.selectbox(
+            "Environmental Indicator",
+            options=[
+                "temperature",
+                "humidity",
+                "pm25",
+                "wind",
+                "water_quality"
+            ]
+        )
+    )
+
+    type_df = (
+        environmental_df[
+            environmental_df[
+                "sensor_type"
+            ]
+            ==
+            sensor_type
+        ]
+        .copy()
+    )
+
+    if not type_df.empty:
+
+        latest_round = int(
+            type_df[
+                "round"
+            ].max()
+        )
+
+        latest_df = (
+            type_df[
+                type_df[
+                    "round"
+                ]
+                ==
+                latest_round
+            ]
+        )
+
+        env1, env2, env3 = (
+            st.columns(3)
+        )
+
+        env1.metric(
+            "Average",
+            f"{latest_df['value'].mean():.2f}"
+        )
+
+        env2.metric(
+            "Minimum",
+            f"{latest_df['value'].min():.2f}"
+        )
+
+        env3.metric(
+            "Maximum",
+            f"{latest_df['value'].max():.2f}"
+        )
+
+        st.caption(
+            f"Latest measurement round: "
+            f"{latest_round}"
+        )
+
+        trend_df = (
+            type_df
+            .groupby(
+                "round",
+                as_index=True
+            )[
+                "value"
+            ]
+            .mean()
+            .to_frame(
+                name="Average"
+            )
+        )
+
+        st.markdown(
+            "#### Average Trend"
+        )
+
+        st.line_chart(
+            trend_df
+        )
+
+        available_sensors = sorted(
+            type_df[
+                "source_id"
+            ].unique()
+        )
+
+        selected_environment_sensor = (
+            st.selectbox(
+                "Sensor History",
+                available_sensors,
+                format_func=lambda s: f"Sensor {s}"
+            )
+        )
+
+        st.markdown(
+            "#### Individual Trend"
+        )
+
+        sensor_history = (
+            type_df[
+                type_df[
+                    "source_id"
+                ]
+                ==
+                selected_environment_sensor
+            ]
+            .set_index(
+                "round"
+            )
+        )
+
+        st.line_chart(
+            sensor_history[
+                ["value"]
+            ]
+        )
+
+        st.markdown(
+            "#### Latest Spatial Measurements"
+        )
+
+        spatial_figure = (
+            px.scatter(
+                latest_df,
+
+                x="x",
+
+                y="y",
+
+                color="value",
+
+                hover_data=[
+                    "source_id",
+                    "value",
+                    "unit"
+                ],
+
+                title=(
+                    f"{sensor_type} — "
+                    f"Round {latest_round}"
+                )
+            )
+        )
+
+        spatial_figure.update_layout(
+            height=650
+        )
+
+        spatial_figure.update_xaxes(
+            range=[0, 2000]
+        )
+
+        spatial_figure.update_yaxes(
+            range=[0, 2000],
+            scaleanchor="x",
+            scaleratio=1
+        )
+
+        st.plotly_chart(
+            spatial_figure,
+            use_container_width=True
+        )
+
+    with st.expander(
+        "📋 Collected Environmental Data"
+    ):
+
+        st.dataframe(
+            environmental_df.sort_values(
+                [
+                    "round",
+                    "source_id"
+                ],
+                ascending=[
+                    False,
+                    True
+                ]
+            ),
+
+            use_container_width=True,
+
+            hide_index=True
+        )

@@ -166,7 +166,7 @@ def create_network_figure(
             continue
 
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=[
                     sensor.x
                     for sensor in group
@@ -192,6 +192,11 @@ def create_network_figure(
                         f"<br>Neighbors: "
                         f"{len(sensor.neighbors)}"
                     )
+                    for sensor in group
+                ],
+
+                customdata=[
+                    sensor.node_id
                     for sensor in group
                 ],
 
@@ -222,6 +227,8 @@ def create_network_figure(
             ),
 
             text=["SINK"],
+
+            customdata=["SINK"],
 
             textposition="top center",
 
@@ -285,6 +292,8 @@ def create_network_figure(
                     for node in route.path
                 ],
 
+                customdata=route.path,
+
                 textposition="top center",
 
                 name="Selected Route"
@@ -293,6 +302,8 @@ def create_network_figure(
 
     fig.update_layout(
         title="Wireless Sensor Network",
+
+        clickmode="event+select",
 
         xaxis=dict(
             title="X (m)",

@@ -16,6 +16,12 @@ from routing.minimum_hop import (
 from routing.route_manager import (
     RouteManager
 )
+from data.generator import (
+    EnvironmentalDataGenerator
+)
+from environment.collector import (
+    EnvironmentalDataCollector
+)
 
 
 @dataclass
@@ -127,6 +133,38 @@ class WSNSimulator:
                 "sampling_interval_seconds"
             ]
         )
+
+        environment_config = (
+            config.get(
+                "environment",
+                {}
+            )
+        )
+
+        self.environment_enabled = (
+            environment_config.get(
+                "enabled",
+                False
+            )
+        )
+
+        if self.environment_enabled:
+
+            self.environment_generator = (
+                EnvironmentalDataGenerator(
+                    config
+                )
+            )
+
+            self.environment_collector = (
+                EnvironmentalDataCollector()
+            )
+
+        else:
+
+            self.environment_generator = None
+
+            self.environment_collector = None
 
         self.history = []
         self.fnd_round = None
@@ -254,6 +292,34 @@ class WSNSimulator:
 
         sensor = self.sensor_map[source_id]
 
+        measurement = None
+
+        if (
+            self.environment_enabled
+            and
+            sensor.is_alive()
+        ):
+
+            simulation_time_seconds = (
+                self.current_round
+                *
+                self.sampling_interval_seconds
+            )
+
+            measurement = (
+                self.environment_generator.generate(
+                    sensor=sensor,
+
+                    round_number=(
+                        self.current_round
+                    ),
+
+                    simulation_time_seconds=(
+                        simulation_time_seconds
+                    )
+                )
+            )
+
         self.sequence_numbers[
             source_id
         ] += 1
@@ -267,7 +333,9 @@ class WSNSimulator:
                 ]
             ),
 
-            sensor_type=sensor.sensor_type,
+            sensor_type=(
+                sensor.sensor_type
+            ),
 
             payload_size_bytes=(
                 self.packet_size_bytes
@@ -275,6 +343,28 @@ class WSNSimulator:
 
             created_round=(
                 self.current_round
+            ),
+
+            measurement_value=(
+                measurement.value
+                if measurement
+                else None
+            ),
+
+            measurement_unit=(
+                measurement.unit
+                if measurement
+                else None
+            ),
+
+            simulation_time_seconds=(
+                measurement.simulation_time_seconds
+                if measurement
+                else 0.0
+            ),
+
+            raw_payload_size_bytes=(
+                self.packet_size_bytes
             )
         )
 
@@ -285,6 +375,16 @@ class WSNSimulator:
         self.generated_bytes += (
             packet.payload_size_bytes
         )
+
+        if (
+            self.environment_collector
+            is not None
+        ):
+
+            self.environment_collector.record_generated(
+                packet=packet,
+                sensor=sensor
+            )
 
         return packet
 
@@ -542,6 +642,22 @@ class WSNSimulator:
         self.network.sink.received_bytes += (
             packet.payload_size_bytes
         )
+
+        if (
+            self.environment_collector
+            is not None
+        ):
+
+            source_sensor = (
+                self.sensor_map[
+                    packet.source_id
+                ]
+            )
+
+            self.environment_collector.record_received(
+                packet=packet,
+                sensor=source_sensor
+            )
 
         return TransmissionResult(
             packet=packet,
