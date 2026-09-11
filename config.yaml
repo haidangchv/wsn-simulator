@@ -50,6 +50,8 @@ environment:
   temporal_period_rounds: 144
   temporal_smoothing: 0.85
 
+  freshness_max_rounds: 5
+
   noise:
     temperature: 0.15
     humidity: 0.40
@@ -84,3 +86,76 @@ environment:
   interpolation:
     method: "idw"
     power: 2
+    grid_resolution: 70
+
+  confidence:
+    support_radius_m: 450
+    low_confidence_threshold: 0.45
+
+  living_quality:
+
+    minimum_indicators_for_elqi: 3
+
+    weights:
+      temperature: 0.20
+      humidity: 0.15
+      pm25: 0.30
+      wind: 0.10
+      water_quality: 0.25
+
+    scoring:
+
+      temperature:
+        method: "optimal_range"
+        hard_min: 15.0
+        ideal_min: 22.0
+        ideal_max: 30.0
+        hard_max: 42.0
+
+      humidity:
+        method: "optimal_range"
+        hard_min: 20.0
+        ideal_min: 40.0
+        ideal_max: 70.0
+        hard_max: 95.0
+
+      pm25:
+        method: "breakpoints"
+        breakpoints:
+          - [0, 100]
+          - [15, 90]
+          - [35, 70]
+          - [55, 50]
+          - [100, 20]
+          - [200, 0]
+
+      wind:
+        method: "optimal_range"
+        hard_min: 0.0
+        ideal_min: 0.5
+        ideal_max: 5.0
+        hard_max: 12.0
+
+      water_quality:
+        method: "direct_score"
+
+    ratings:
+      very_good:
+        min_score: 80
+        label: "Rất tốt"
+
+      good:
+        min_score: 65
+        label: "Tốt"
+
+      moderate:
+        min_score: 50
+        label: "Trung bình"
+
+      poor:
+        min_score: 35
+        label: "Kém"
+
+      very_poor:
+        min_score: 0
+        label: "Rất kém"

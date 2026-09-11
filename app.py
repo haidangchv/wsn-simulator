@@ -1,6 +1,7 @@
 from copy import deepcopy
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -20,6 +21,17 @@ from streamlit_components.network_chart import (
 from experiments.compare_routing import (
     compare_algorithms
 )
+
+from environment.analyzer import (
+    EnvironmentalAnalyzer
+)
+
+from visualization.environment import (
+    create_confidence_map,
+    create_elqi_zone_map,
+    create_indicator_heatmap
+)
+
 
 
 # -----------------------------------------
@@ -1479,19 +1491,17 @@ with st.expander(
 
 
 # =========================================
-# ENVIRONMENTAL MONITORING
+# ENVIRONMENTAL INTELLIGENCE
 # =========================================
 
 st.divider()
 
-st.subheader(
-    "🌿 Environmental Monitoring"
+st.header(
+    "🌿 Environmental Intelligence"
 )
 
-collector = getattr(
-    simulator,
-    "environment_collector",
-    None
+collector = (
+    simulator.environment_collector
 )
 
 if (
@@ -1501,204 +1511,591 @@ if (
 ):
 
     st.info(
-        "Run the simulation to collect "
-        "environmental sensor data."
+        "Run at least one simulation round "
+        "to collect environmental data."
     )
 
 else:
 
-    environmental_df = (
-        collector.received_dataframe()
-    )
-
-    sensor_type = (
-        st.selectbox(
-            "Environmental Indicator",
-            options=[
-                "temperature",
-                "humidity",
-                "pm25",
-                "wind",
-                "water_quality"
-            ]
+    analyzer = (
+        EnvironmentalAnalyzer(
+            st.session_state.config
         )
     )
 
-    type_df = (
-        environmental_df[
+    (
+        trend_tab,
+        heatmap_tab,
+        quality_tab
+    ) = st.tabs([
+        "📈 Trends",
+        "🌡 Heatmaps",
+        "🗺 Living Quality"
+    ])
+
+    with trend_tab:
+
+        environmental_df = (
+            collector.received_dataframe()
+        )
+
+        indicator = (
+            st.selectbox(
+                "Indicator",
+                [
+                    "temperature",
+                    "humidity",
+                    "pm25",
+                    "wind",
+                    "water_quality"
+                ],
+                key="trend_indicator"
+            )
+        )
+
+        indicator_df = (
             environmental_df[
-                "sensor_type"
-            ]
-            ==
-            sensor_type
-        ]
-        .copy()
-    )
-
-    if not type_df.empty:
-
-        latest_round = int(
-            type_df[
-                "round"
-            ].max()
-        )
-
-        latest_df = (
-            type_df[
-                type_df[
-                    "round"
+                environmental_df[
+                    "sensor_type"
                 ]
                 ==
-                latest_round
+                indicator
             ]
+            .copy()
         )
 
-        env1, env2, env3 = (
-            st.columns(3)
-        )
+        if not indicator_df.empty:
 
-        env1.metric(
-            "Average",
-            f"{latest_df['value'].mean():.2f}"
-        )
-
-        env2.metric(
-            "Minimum",
-            f"{latest_df['value'].min():.2f}"
-        )
-
-        env3.metric(
-            "Maximum",
-            f"{latest_df['value'].max():.2f}"
-        )
-
-        st.caption(
-            f"Latest measurement round: "
-            f"{latest_round}"
-        )
-
-        trend_df = (
-            type_df
-            .groupby(
-                "round",
-                as_index=True
-            )[
-                "value"
-            ]
-            .mean()
-            .to_frame(
-                name="Average"
+            average_trend = (
+                indicator_df
+                .groupby(
+                    "round"
+                )[
+                    "value"
+                ]
+                .mean()
+                .to_frame(
+                    "Average"
+                )
             )
-        )
 
-        st.markdown(
-            "#### Average Trend"
-        )
-
-        st.line_chart(
-            trend_df
-        )
-
-        available_sensors = sorted(
-            type_df[
-                "source_id"
-            ].unique()
-        )
-
-        selected_environment_sensor = (
-            st.selectbox(
-                "Sensor History",
-                available_sensors,
-                format_func=lambda s: f"Sensor {s}"
+            st.subheader(
+                "Average Trend"
             )
-        )
 
-        st.markdown(
-            "#### Individual Trend"
-        )
+            st.line_chart(
+                average_trend
+            )
 
-        sensor_history = (
-            type_df[
-                type_df[
+            sensor_ids = sorted(
+                indicator_df[
                     "source_id"
                 ]
-                ==
-                selected_environment_sensor
-            ]
-            .set_index(
-                "round"
+                .unique()
+            )
+
+            selected_sensor = (
+                st.selectbox(
+                    "Sensor",
+                    sensor_ids,
+                    key="environment_sensor"
+                )
+            )
+
+            sensor_history = (
+                indicator_df[
+                    indicator_df[
+                        "source_id"
+                    ]
+                    ==
+                    selected_sensor
+                ]
+                .set_index(
+                    "round"
+                )
+            )
+
+            st.subheader(
+                f"Sensor {selected_sensor}"
+            )
+
+            st.line_chart(
+                sensor_history[
+                    ["value"]
+                ]
+            )
+
+    with heatmap_tab:
+
+        indicator = (
+            st.selectbox(
+                "Heatmap Indicator",
+                [
+                    "temperature",
+                    "humidity",
+                    "pm25",
+                    "wind",
+                    "water_quality"
+                ],
+                key="heatmap_indicator"
             )
         )
 
-        st.line_chart(
-            sensor_history[
-                ["value"]
-            ]
+        snapshot = (
+            analyzer.latest_sensor_snapshot(
+                collector=collector,
+
+                current_round=(
+                    simulator.current_round
+                ),
+
+                sensor_type=indicator
+            )
         )
 
-        st.markdown(
-            "#### Latest Spatial Measurements"
-        )
+        if snapshot.empty:
 
-        spatial_figure = (
-            px.scatter(
-                latest_df,
+            st.warning(
+                "No sufficiently recent data "
+                "is available for this indicator."
+            )
 
-                x="x",
+        else:
 
-                y="y",
+            latest1, latest2, latest3 = (
+                st.columns(3)
+            )
 
-                color="value",
+            latest1.metric(
+                "Average",
+                f"{snapshot['value'].mean():.2f}"
+            )
 
-                hover_data=[
-                    "source_id",
-                    "value",
-                    "unit"
-                ],
+            latest2.metric(
+                "Minimum",
+                f"{snapshot['value'].min():.2f}"
+            )
 
-                title=(
-                    f"{sensor_type} — "
-                    f"Round {latest_round}"
+            latest3.metric(
+                "Maximum",
+                f"{snapshot['value'].max():.2f}"
+            )
+
+            heatmap_figure = (
+                create_indicator_heatmap(
+                    snapshot=snapshot,
+
+                    sensor_type=indicator,
+
+                    config=(
+                        st.session_state.config
+                    ),
+
+                    sink=network.sink
+                )
+            )
+
+            st.plotly_chart(
+                heatmap_figure,
+                use_container_width=True
+            )
+
+            st.caption(
+                f"Based on "
+                f"{len(snapshot)} recent sensor "
+                f"measurements received by the Sink."
+            )
+
+    with quality_tab:
+
+        zone_df = (
+            analyzer.build_zone_snapshot(
+                collector=collector,
+
+                current_round=(
+                    simulator.current_round
                 )
             )
         )
 
-        spatial_figure.update_layout(
-            height=650
-        )
-
-        spatial_figure.update_xaxes(
-            range=[0, 2000]
-        )
-
-        spatial_figure.update_yaxes(
-            range=[0, 2000],
-            scaleanchor="x",
-            scaleratio=1
-        )
-
-        st.plotly_chart(
-            spatial_figure,
-            use_container_width=True
-        )
-
-    with st.expander(
-        "📋 Collected Environmental Data"
-    ):
-
-        st.dataframe(
-            environmental_df.sort_values(
-                [
-                    "round",
-                    "source_id"
-                ],
-                ascending=[
-                    False,
-                    True
+        valid_zones = (
+            zone_df[
+                zone_df[
+                    "elqi"
                 ]
-            ),
+                .notna()
+            ]
+            .copy()
+        )
 
-            use_container_width=True,
+        if valid_zones.empty:
 
-            hide_index=True
-        )
+            st.warning(
+                "Not enough environmental data "
+                "to calculate ELQI."
+            )
+
+        else:
+
+            confidence_weights = (
+                valid_zones[
+                    "confidence"
+                ]
+                .clip(
+                    lower=0.01
+                )
+            )
+
+            overall_elqi = (
+                (
+                    valid_zones[
+                        "elqi"
+                    ]
+                    *
+                    confidence_weights
+                )
+                .sum()
+                /
+                confidence_weights.sum()
+            )
+
+            best_zone = (
+                valid_zones.loc[
+                    valid_zones[
+                        "elqi"
+                    ].idxmax()
+                ]
+            )
+
+            worst_zone = (
+                valid_zones.loc[
+                    valid_zones[
+                        "elqi"
+                    ].idxmin()
+                ]
+            )
+
+            low_confidence_count = int(
+                valid_zones[
+                    "low_confidence"
+                ]
+                .sum()
+            )
+
+            q1, q2, q3, q4 = (
+                st.columns(4)
+            )
+
+            q1.metric(
+                "Overall ELQI",
+                f"{overall_elqi:.1f}"
+            )
+
+            q2.metric(
+                "Best Zone",
+                (
+                    f"{best_zone['zone_id']} "
+                    f"({best_zone['elqi']:.1f})"
+                )
+            )
+
+            q3.metric(
+                "Worst Zone",
+                (
+                    f"{worst_zone['zone_id']} "
+                    f"({worst_zone['elqi']:.1f})"
+                )
+            )
+
+            q4.metric(
+                "Low Confidence Zones",
+                low_confidence_count
+            )
+
+            quality_figure = (
+                create_elqi_zone_map(
+                    zone_dataframe=(
+                        zone_df
+                    ),
+
+                    config=(
+                        st.session_state.config
+                    ),
+
+                    sink=(
+                        network.sink
+                    )
+                )
+            )
+
+            st.plotly_chart(
+                quality_figure,
+                use_container_width=True
+            )
+
+            st.caption(
+                "⚠ indicates a zone whose "
+                "environmental estimate has "
+                "low data confidence."
+            )
+
+            with st.expander(
+                "📡 Data Confidence Map"
+            ):
+
+                confidence_figure = (
+                    create_confidence_map(
+                        zone_dataframe=(
+                            zone_df
+                        ),
+
+                        config=(
+                            st.session_state.config
+                        )
+                    )
+                )
+
+                st.plotly_chart(
+                    confidence_figure,
+                    use_container_width=True
+                )
+
+            st.subheader(
+                "Zone Assessment"
+            )
+
+            display_columns = [
+                "zone_id",
+                "temperature",
+                "humidity",
+                "pm25",
+                "wind",
+                "water_quality",
+                "temperature_score",
+                "humidity_score",
+                "pm25_score",
+                "wind_score",
+                "water_quality_score",
+                "elqi",
+                "rating",
+                "confidence"
+            ]
+
+            zone_display = (
+                zone_df[
+                    display_columns
+                ]
+                .copy()
+            )
+
+            numeric_columns = [
+                column
+                for column
+                in zone_display.columns
+                if column
+                not in [
+                    "zone_id",
+                    "rating"
+                ]
+            ]
+
+            zone_display[
+                numeric_columns
+            ] = (
+                zone_display[
+                    numeric_columns
+                ]
+                .round(
+                    2
+                )
+            )
+
+            st.dataframe(
+                zone_display,
+
+                use_container_width=True,
+
+                hide_index=True
+            )
+
+            rank1, rank2 = (
+                st.columns(2)
+            )
+
+            with rank1:
+
+                st.markdown(
+                    "### 🏆 Best Environmental Areas"
+                )
+
+                best_areas = (
+                    valid_zones
+                    .sort_values(
+                        "elqi",
+                        ascending=False
+                    )
+                    .head(10)
+                )
+
+                st.dataframe(
+                    best_areas[
+                        [
+                            "zone_id",
+                            "elqi",
+                            "rating",
+                            "confidence"
+                        ]
+                    ],
+
+                    hide_index=True,
+
+                    use_container_width=True
+                )
+
+            with rank2:
+
+                st.markdown(
+                    "### ⚠ Areas Requiring Attention"
+                )
+
+                worst_areas = (
+                    valid_zones
+                    .sort_values(
+                        "elqi",
+                        ascending=True
+                    )
+                    .head(10)
+                )
+
+                st.dataframe(
+                    worst_areas[
+                        [
+                            "zone_id",
+                            "elqi",
+                            "rating",
+                            "confidence"
+                        ]
+                    ],
+
+                    hide_index=True,
+
+                    use_container_width=True
+                )
+
+            st.subheader(
+                "🔍 Zone Detail"
+            )
+
+            selected_zone_id = (
+                st.selectbox(
+                    "Zone",
+                    zone_df[
+                        "zone_id"
+                    ].tolist()
+                )
+            )
+
+            selected_zone = (
+                zone_df[
+                    zone_df[
+                        "zone_id"
+                    ]
+                    ==
+                    selected_zone_id
+                ]
+                .iloc[0]
+            )
+
+            z1, z2, z3 = (
+                st.columns(3)
+            )
+
+            z1.metric(
+                "ELQI",
+                (
+                    f"{selected_zone['elqi']:.1f}"
+                    if not np.isnan(
+                        selected_zone[
+                            "elqi"
+                        ]
+                    )
+                    else "-"
+                )
+            )
+
+            z2.metric(
+                "Rating",
+                selected_zone[
+                    "rating"
+                ]
+            )
+
+            z3.metric(
+                "Confidence",
+                (
+                    f"{selected_zone['confidence'] * 100:.1f}%"
+                )
+            )
+
+            zone_scores = pd.DataFrame({
+
+                "Indicator": [
+                    "Temperature",
+                    "Humidity",
+                    "PM2.5",
+                    "Wind",
+                    "Water Quality"
+                ],
+
+                "Value": [
+                    selected_zone[
+                        "temperature"
+                    ],
+
+                    selected_zone[
+                        "humidity"
+                    ],
+
+                    selected_zone[
+                        "pm25"
+                    ],
+
+                    selected_zone[
+                        "wind"
+                    ],
+
+                    selected_zone[
+                        "water_quality"
+                    ]
+                ],
+
+                "Score": [
+                    selected_zone[
+                        "temperature_score"
+                    ],
+
+                    selected_zone[
+                        "humidity_score"
+                    ],
+
+                    selected_zone[
+                        "pm25_score"
+                    ],
+
+                    selected_zone[
+                        "wind_score"
+                    ],
+
+                    selected_zone[
+                        "water_quality_score"
+                    ]
+                ]
+            })
+
+            st.dataframe(
+                zone_scores.round(2),
+
+                use_container_width=True,
+
+                hide_index=True
+            )
