@@ -131,10 +131,18 @@ class SimulatorMetricsTest(
             self.simulator.get_metrics()
         )
 
-        self.assertEqual(
-            metrics["average_delay_ms"],
-            10
+        expected_delay = (
+            (128 * 8 / 250000 * 1000)
+            + (50 / 300000000 * 1000)
+            + 1.0
         )
+
+        self.assertAlmostEqual(
+            metrics["average_delay_ms"],
+            expected_delay,
+            places=3
+        )
+
 
     def test_average_hop(self):
 

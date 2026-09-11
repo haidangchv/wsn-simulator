@@ -18,10 +18,135 @@ from environment.zones import (
     create_zones
 )
 
-
+from environment.degradation import (
+    ZoneHistoryTracker,
+    calculate_zone_degradation
+)
 class EnvironmentAnalysisTest(
     unittest.TestCase
 ):
+
+    def test_zone_history_tracker(
+            self
+        ):
+
+            tracker = (
+                ZoneHistoryTracker()
+            )
+
+            dataframe = pd.DataFrame([
+                {
+                    "zone_id": "Z001",
+                    "row": 0,
+                    "column": 0,
+                    "center_x": 100,
+                    "center_y": 100,
+                    "elqi": 80,
+                    "rating": "Rất tốt",
+                    "confidence": 0.90
+                }
+            ])
+
+            tracker.record_snapshot(
+                dataframe,
+                round_number=10
+            )
+
+            history = (
+                tracker.dataframe()
+            )
+
+            self.assertEqual(
+                len(history),
+                1
+            )
+
+            self.assertEqual(
+                history.iloc[0][
+                    "round"
+                ],
+                10
+            )
+
+    def test_degradation_delta(
+        self
+    ):
+
+        history = pd.DataFrame([
+            {
+                "round": 100,
+                "zone_id": "Z001",
+                "row": 0,
+                "column": 0,
+                "center_x": 100,
+                "center_y": 100,
+                "elqi": 80,
+                "rating": "Rất tốt",
+                "confidence": 0.9
+            },
+
+            {
+                "round": 200,
+                "zone_id": "Z001",
+                "row": 0,
+                "column": 0,
+                "center_x": 100,
+                "center_y": 100,
+                "elqi": 60,
+                "rating": "Trung bình",
+                "confidence": 0.9
+            }
+        ])
+
+        config = {
+            "environment": {
+
+                "degradation": {
+
+                    "lookback_rounds":
+                        100,
+
+                    "improvement_threshold":
+                        3,
+
+                    "stable_tolerance":
+                        3,
+
+                    "significant_decline_threshold":
+                        -8,
+
+                    "severe_decline_threshold":
+                        -15,
+
+                    "minimum_confidence":
+                        0.45
+                }
+            }
+        }
+
+        result = (
+            calculate_zone_degradation(
+                history_dataframe=history,
+
+                config=config,
+
+                current_round=200
+            )
+        )
+
+        self.assertAlmostEqual(
+            result.iloc[0][
+                "delta_elqi"
+            ],
+            -20
+        )
+
+        self.assertEqual(
+            result.iloc[0][
+                "degradation_status"
+            ],
+            "Suy giảm nghiêm trọng"
+        )
 
     def test_idw_exact_point(self):
 

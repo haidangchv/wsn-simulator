@@ -25,6 +25,12 @@ class SensorNode:
     forwarded_packets: int = 0
     consumed_energy_j: float = 0.0
 
+    death_round: int | None = None
+    transmitted_bytes: int = 0
+    received_bytes: int = 0
+    forwarded_bytes: int = 0
+
+
     def consume_energy(
         self,
         amount_j: float,

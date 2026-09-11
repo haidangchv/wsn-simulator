@@ -37,6 +37,12 @@ class Packet:
 
     delay_ms: float = 0.0
 
+    transmission_time_ms: float = 0.0
+
+    processing_delay_ms: float = 0.0
+
+    propagation_delay_ms: float = 0.0
+
     route: list[NodeId] = field(
         default_factory=list
     )

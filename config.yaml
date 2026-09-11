@@ -18,6 +18,14 @@ energy:
   eps_mp_pj_per_bit_m4: 0.0013
   per_hop_delay_ms: 10
 
+radio:
+  data_rate_bps: 250000
+
+  processing_delay_ms_per_hop: 1.0
+
+  propagation_speed_m_s: 300000000
+
+
 sensor:
   initial_energy_j: 2.0
   transmission_range_m: 200
@@ -159,3 +167,21 @@ environment:
       very_poor:
         min_score: 0
         label: "Rất kém"
+
+  analysis_interval_rounds: 10
+
+  degradation:
+    lookback_rounds: 100
+
+    improvement_threshold: 3.0
+    stable_tolerance: 3.0
+
+    significant_decline_threshold: -8.0
+    severe_decline_threshold: -15.0
+
+    minimum_confidence: 0.45
+
+  alerts:
+    warning_elqi_below: 50
+    critical_elqi_below: 35
+    significant_decline_below: -8

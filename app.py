@@ -26,11 +26,21 @@ from environment.analyzer import (
     EnvironmentalAnalyzer
 )
 
+from environment.alerts import (
+    build_zone_alerts
+)
+
+from environment.degradation import (
+    calculate_zone_degradation
+)
+
 from visualization.environment import (
     create_confidence_map,
+    create_degradation_map,
     create_elqi_zone_map,
     create_indicator_heatmap
 )
+
 
 
 
@@ -1118,6 +1128,198 @@ if (
         f"{metrics['fnd_round']}."
     )
 
+st.subheader(
+    "🚀 Data Transfer Performance"
+)
+
+transfer_metrics = (
+    simulator.get_metrics()
+)
+
+t1, t2, t3, t4 = (
+    st.columns(4)
+)
+
+t1.metric(
+    "PHY Data Rate",
+    (
+        f"{transfer_metrics['link_data_rate_bps'] / 1000:.0f} kbps"
+    )
+)
+
+t2.metric(
+    "Actual Throughput",
+    (
+        f"{transfer_metrics['throughput_bps'] / 1000:.2f} kbps"
+    )
+)
+
+t3.metric(
+    "Average TX Time",
+    (
+        f"{transfer_metrics['average_transmission_time_ms']:.2f} ms"
+    )
+)
+
+t4.metric(
+    "Average E2E Delay",
+    (
+        f"{transfer_metrics['average_delay_ms']:.2f} ms"
+    )
+)
+
+d1, d2, d3 = (
+    st.columns(3)
+)
+
+d1.metric(
+    "Delivered to Sink",
+    (
+        f"{transfer_metrics['delivered_data_mb']:.2f} MB"
+    )
+)
+
+d2.metric(
+    "Total Network TX",
+    (
+        f"{transfer_metrics['network_load_mb']:.2f} MB"
+    )
+)
+
+d3.metric(
+    "Energy Efficiency",
+    (
+        f"{transfer_metrics['energy_efficiency_bits_per_j']:.0f} bit/J"
+    )
+)
+
+st.subheader(
+    "🔋 Data Delivered Until Battery Depletion"
+)
+
+def format_lifetime_data(
+    round_value,
+    byte_value
+):
+
+    if (
+        round_value is None
+        or
+        byte_value is None
+    ):
+
+        return "-"
+
+    mb = (
+        byte_value
+        /
+        (
+            1024 ** 2
+        )
+    )
+
+    return (
+        f"{mb:.2f} MB "
+        f"@ Round {round_value}"
+    )
+
+l1, l2, l3 = (
+    st.columns(3)
+)
+
+l1.metric(
+    "Until FND",
+    format_lifetime_data(
+        transfer_metrics[
+            "fnd_round"
+        ],
+
+        transfer_metrics[
+            "delivered_bytes_at_fnd"
+        ]
+    )
+)
+
+l2.metric(
+    "Until HND",
+    format_lifetime_data(
+        transfer_metrics[
+            "hnd_round"
+        ],
+
+        transfer_metrics[
+            "delivered_bytes_at_hnd"
+        ]
+    )
+)
+
+l3.metric(
+    "Until LND",
+    format_lifetime_data(
+        transfer_metrics[
+            "lnd_round"
+        ],
+
+        transfer_metrics[
+            "delivered_bytes_at_lnd"
+        ]
+    )
+)
+
+st.subheader(
+    "🔗 Network Connectivity Lifetime"
+)
+
+c1, c2, c3, c4 = (
+    st.columns(4)
+)
+
+c1.metric(
+    "Connected Alive",
+    transfer_metrics[
+        "connected_alive_nodes"
+    ]
+)
+
+c2.metric(
+    "Connectivity",
+    (
+        f"{transfer_metrics['routing_connectivity_ratio'] * 100:.1f}%"
+    )
+)
+
+c3.metric(
+    "90% Connectivity",
+    (
+        transfer_metrics[
+            "connectivity_90_round"
+        ]
+        or "-"
+    )
+)
+
+c4.metric(
+    "50% Connectivity",
+    (
+        transfer_metrics[
+            "connectivity_50_round"
+        ]
+        or "-"
+    )
+)
+
+st.progress(
+    transfer_metrics[
+        "routing_connectivity_ratio"
+    ],
+
+    text=(
+        "Alive sensors currently "
+        "able to reach the Sink"
+    )
+)
+
+
 
 # =========================================
 # ROUTING ENGINE PERFORMANCE
@@ -1363,6 +1565,69 @@ if simulator.history:
         )
 
 
+    chart5, chart6 = (
+        st.columns(2)
+    )
+
+    with chart5:
+
+        connectivity_chart = (
+            history_df[
+                [
+                    "routing_connectivity_ratio"
+                ]
+            ]
+            .copy()
+        )
+
+        connectivity_chart[
+            "routing_connectivity_ratio"
+        ] *= 100
+
+        st.markdown(
+            "**Routing Connectivity (%)**"
+        )
+
+        st.line_chart(
+            connectivity_chart
+        )
+
+    with chart6:
+
+        delivered_chart = (
+            history_df[
+                [
+                    "delivered_bytes"
+                ]
+            ]
+            .copy()
+        )
+
+        delivered_chart[
+            "delivered_bytes"
+        ] /= (
+            1024 ** 2
+        )
+
+        delivered_chart = (
+            delivered_chart.rename(
+                columns={
+                    "delivered_bytes":
+                        "Delivered MB"
+                }
+            )
+        )
+
+        st.markdown(
+            "**Cumulative Data Delivered to Sink**"
+        )
+
+        st.line_chart(
+            delivered_chart
+        )
+
+
+
 # =========================================
 # ROUTING COMPARISON
 # =========================================
@@ -1526,12 +1791,15 @@ else:
     (
         trend_tab,
         heatmap_tab,
-        quality_tab
+        quality_tab,
+        degradation_tab
     ) = st.tabs([
         "📈 Trends",
         "🌡 Heatmaps",
-        "🗺 Living Quality"
+        "🗺 Living Quality",
+        "📉 Degradation"
     ])
+
 
     with trend_tab:
 
@@ -2099,3 +2367,377 @@ else:
 
                 hide_index=True
             )
+
+    with degradation_tab:
+
+        tracker = (
+            simulator
+            .zone_history_tracker
+        )
+
+        if (
+            tracker is None
+        ):
+
+            st.info(
+                "Environmental history "
+                "is not available."
+            )
+
+        else:
+
+            history_df = (
+                tracker.dataframe()
+            )
+
+            if history_df.empty:
+
+                st.info(
+                    "Run the simulation to "
+                    "collect ELQI history."
+                )
+
+            else:
+
+                available_snapshot_rounds = (
+                    sorted(
+                        history_df[
+                            "round"
+                        ].unique()
+                    )
+                )
+
+                st.caption(
+                    f"Environmental snapshots: "
+                    f"{len(available_snapshot_rounds)} | "
+                    f"Latest snapshot: "
+                    f"{max(available_snapshot_rounds)}"
+                )
+
+                degradation_df = (
+                    calculate_zone_degradation(
+                        history_dataframe=(
+                            history_df
+                        ),
+
+                        config=(
+                            st.session_state.config
+                        ),
+
+                        current_round=(
+                            simulator.current_round
+                        )
+                    )
+                )
+
+                if degradation_df.empty:
+
+                    st.info(
+                        "More environmental history "
+                        "is required."
+                    )
+
+                else:
+
+                    full_lookback = bool(
+                        degradation_df[
+                            "full_lookback"
+                        ]
+                        .iloc[0]
+                    )
+
+                    if not full_lookback:
+
+                        st.warning(
+                            "The configured degradation "
+                            "lookback window has not yet "
+                            "been fully reached. Current "
+                            "results use the earliest "
+                            "available snapshot."
+                        )
+
+                    reliable = (
+                        degradation_df[
+                            degradation_df[
+                                "degradation_status"
+                            ]
+                            !=
+                            "Độ tin cậy thấp"
+                        ]
+                        .copy()
+                    )
+
+                    declining = (
+                        reliable[
+                            reliable[
+                                "delta_elqi"
+                            ]
+                            <
+                            -3
+                        ]
+                    )
+
+                    severe = (
+                        reliable[
+                            reliable[
+                                "degradation_status"
+                            ]
+                            ==
+                            "Suy giảm nghiêm trọng"
+                        ]
+                    )
+
+                    if not reliable.empty:
+
+                        average_delta = (
+                            reliable[
+                                "delta_elqi"
+                            ].mean()
+                        )
+
+                        worst_decline = (
+                            reliable.loc[
+                                reliable[
+                                    "delta_elqi"
+                                ].idxmin()
+                            ]
+                        )
+
+                    else:
+
+                        average_delta = 0.0
+                        worst_decline = None
+
+                    d1, d2, d3, d4 = (
+                        st.columns(4)
+                    )
+
+                    d1.metric(
+                        "Average Δ ELQI",
+                        f"{average_delta:+.2f}"
+                    )
+
+                    d2.metric(
+                        "Declining Zones",
+                        len(
+                            declining
+                        )
+                    )
+
+                    d3.metric(
+                        "Severe Decline",
+                        len(
+                            severe
+                        )
+                    )
+
+                    d4.metric(
+                        "Worst Decline",
+                        (
+                            f"{worst_decline['zone_id']} "
+                            f"({worst_decline['delta_elqi']:+.1f})"
+                            if worst_decline
+                            is not None
+                            else "-"
+                        )
+                    )
+
+                    degradation_figure = (
+                        create_degradation_map(
+                            degradation_dataframe=(
+                                degradation_df
+                            ),
+
+                            config=(
+                                st.session_state.config
+                            ),
+
+                            sink=(
+                                network.sink
+                            )
+                        )
+                    )
+
+                    st.plotly_chart(
+                        degradation_figure,
+                        use_container_width=True
+                    )
+
+                    st.subheader(
+                        "⚠ Fastest Environmental Decline"
+                    )
+
+                    fastest_decline = (
+                        reliable
+                        .sort_values(
+                            "delta_elqi",
+                            ascending=True
+                        )
+                        .head(10)
+                    )
+
+                    st.dataframe(
+                        fastest_decline[
+                            [
+                                "zone_id",
+                                "baseline_elqi",
+                                "current_elqi",
+                                "delta_elqi",
+                                "trend_per_100_rounds",
+                                "degradation_status",
+                                "comparison_confidence"
+                            ]
+                        ]
+                        .round(2),
+
+                        use_container_width=True,
+
+                        hide_index=True
+                    )
+
+                    alerts_df = (
+                        build_zone_alerts(
+                            degradation_dataframe=(
+                                degradation_df
+                            ),
+
+                            config=(
+                                st.session_state.config
+                            )
+                        )
+                    )
+
+                    st.subheader(
+                        "🚨 Environmental Alerts"
+                    )
+
+                    if alerts_df.empty:
+
+                        st.success(
+                            "No environmental warning "
+                            "conditions detected."
+                        )
+
+                    else:
+
+                        critical_count = (
+                            alerts_df[
+                                alerts_df[
+                                    "severity"
+                                ]
+                                ==
+                                "CRITICAL"
+                            ]
+                            .shape[0]
+                        )
+
+                        warning_count = (
+                            alerts_df[
+                                alerts_df[
+                                    "severity"
+                                ]
+                                ==
+                                "WARNING"
+                            ]
+                            .shape[0]
+                        )
+
+                        data_count = (
+                            alerts_df[
+                                alerts_df[
+                                    "severity"
+                                ]
+                                ==
+                                "DATA"
+                            ]
+                            .shape[0]
+                        )
+
+                        a1, a2, a3 = (
+                            st.columns(3)
+                        )
+
+                        a1.metric(
+                            "Critical",
+                            critical_count
+                        )
+
+                        a2.metric(
+                            "Warnings",
+                            warning_count
+                        )
+
+                        a3.metric(
+                            "Data Quality Alerts",
+                            data_count
+                        )
+
+                        st.dataframe(
+                            alerts_df.round(2),
+
+                            use_container_width=True,
+
+                            hide_index=True
+                        )
+
+                    st.subheader(
+                        "📈 Zone ELQI History"
+                    )
+
+                    selected_history_zone = (
+                        st.selectbox(
+                            "Zone History",
+                            sorted(
+                                history_df[
+                                    "zone_id"
+                                ]
+                                .unique()
+                            ),
+                            key=(
+                                "degradation_zone"
+                            )
+                        )
+                    )
+
+                    zone_history = (
+                        history_df[
+                            history_df[
+                                "zone_id"
+                            ]
+                            ==
+                            selected_history_zone
+                        ]
+                        .sort_values(
+                            "round"
+                        )
+                        .set_index(
+                            "round"
+                        )
+                    )
+
+                    st.line_chart(
+                        zone_history[
+                            ["elqi"]
+                        ]
+                    )
+
+                    st.markdown(
+                        "**Data Confidence History**"
+                    )
+
+                    confidence_history = (
+                        zone_history[
+                            ["confidence"]
+                        ]
+                        .copy()
+                    )
+
+                    confidence_history[
+                        "confidence"
+                    ] *= 100
+
+                    st.line_chart(
+                        confidence_history
+                    )
+
+

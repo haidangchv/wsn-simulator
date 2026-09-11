@@ -2,6 +2,11 @@ from pathlib import Path
 
 import pandas as pd
 
+from environment.degradation import (
+    calculate_zone_degradation
+)
+
+
 
 def history_dataframe(
     simulator
@@ -66,7 +71,19 @@ def node_dataframe(
                 sensor.received_packets,
 
             "forwarded_packets":
-                sensor.forwarded_packets
+                sensor.forwarded_packets,
+
+            "death_round":
+                sensor.death_round,
+
+            "transmitted_bytes":
+                sensor.transmitted_bytes,
+
+            "received_bytes":
+                sensor.received_bytes,
+
+            "forwarded_bytes":
+                sensor.forwarded_bytes
         })
 
     return pd.DataFrame(
@@ -142,4 +159,120 @@ def export_simulation_results(
 
         "summary":
             summary_path
-    } 
+    }
+
+
+def export_environment_results(
+    simulator,
+    output_dir: str = "outputs/results"
+) -> dict:
+
+    output_path = Path(
+        output_dir
+    )
+
+    output_path.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    paths = {}
+
+    collector = (
+        simulator.environment_collector
+    )
+
+    if collector is not None:
+
+        generated_path = (
+            output_path
+            /
+            "environment_generated.csv"
+        )
+
+        received_path = (
+            output_path
+            /
+            "environment_received.csv"
+        )
+
+        collector.generated_dataframe().to_csv(
+            generated_path,
+            index=False
+        )
+
+        collector.received_dataframe().to_csv(
+            received_path,
+            index=False
+        )
+
+        paths[
+            "environment_generated"
+        ] = generated_path
+
+        paths[
+            "environment_received"
+        ] = received_path
+
+    tracker = (
+        simulator.zone_history_tracker
+    )
+
+    if tracker is not None:
+
+        history = (
+            tracker.dataframe()
+        )
+
+        if not history.empty:
+
+            zone_history_path = (
+                output_path
+                /
+                "zone_elqi_history.csv"
+            )
+
+            history.to_csv(
+                zone_history_path,
+                index=False
+            )
+
+            paths[
+                "zone_elqi_history"
+            ] = (
+                zone_history_path
+            )
+
+            degradation = (
+                calculate_zone_degradation(
+                    history_dataframe=history,
+
+                    config=(
+                        simulator.config
+                    ),
+
+                    current_round=(
+                        simulator.current_round
+                    )
+                )
+            )
+
+            if not degradation.empty:
+
+                degradation_path = (
+                    output_path
+                    /
+                    "zone_degradation.csv"
+                )
+
+                degradation.to_csv(
+                    degradation_path,
+                    index=False
+                )
+
+                paths[
+                    "zone_degradation"
+                ] = degradation_path
+
+    return paths
+ 

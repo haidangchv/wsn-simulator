@@ -8,6 +8,7 @@ from core.network import (
     WirelessSensorNetwork
 )
 from metrics.evaluator import (
+    export_environment_results,
     export_simulation_results
 )
 from simulation.simulator import (
@@ -107,6 +108,11 @@ def main():
     export_simulation_results(
         simulator
     )
+
+    export_environment_results(
+        simulator
+    )
+
 
     plot_alive_nodes(
         simulator.history

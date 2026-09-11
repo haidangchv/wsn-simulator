@@ -388,6 +388,342 @@ def create_confidence_map(
 
     return fig
 
+def create_degradation_map(
+    degradation_dataframe,
+    config: dict,
+    sink=None
+):
+
+    if degradation_dataframe.empty:
+        return None
+
+    rows = sorted(
+        degradation_dataframe[
+            "row"
+        ].unique()
+    )
+
+    columns = sorted(
+        degradation_dataframe[
+            "column"
+        ].unique()
+    )
+
+    row_lookup = {
+        value: index
+        for index, value
+        in enumerate(rows)
+    }
+
+    column_lookup = {
+        value: index
+        for index, value
+        in enumerate(columns)
+    }
+
+    shape = (
+        len(rows),
+        len(columns)
+    )
+
+    z = np.full(
+        shape,
+        np.nan
+    )
+
+    customdata = np.empty(
+        (
+            len(rows),
+            len(columns),
+            7
+        ),
+        dtype=object
+    )
+
+    for _, zone in (
+        degradation_dataframe.iterrows()
+    ):
+
+        r = row_lookup[
+            zone["row"]
+        ]
+
+        c = column_lookup[
+            zone["column"]
+        ]
+
+        z[
+            r,
+            c
+        ] = zone[
+            "delta_elqi"
+        ]
+
+        customdata[
+            r,
+            c,
+            0
+        ] = zone[
+            "zone_id"
+        ]
+
+        customdata[
+            r,
+            c,
+            1
+        ] = zone[
+            "baseline_elqi"
+        ]
+
+        customdata[
+            r,
+            c,
+            2
+        ] = zone[
+            "current_elqi"
+        ]
+
+        customdata[
+            r,
+            c,
+            3
+        ] = zone[
+            "degradation_status"
+        ]
+
+        customdata[
+            r,
+            c,
+            4
+        ] = zone[
+            "comparison_confidence"
+        ]
+
+        customdata[
+            r,
+            c,
+            5
+        ] = zone[
+            "baseline_round"
+        ]
+
+        customdata[
+            r,
+            c,
+            6
+        ] = zone[
+            "latest_round"
+        ]
+
+    finite_values = (
+        degradation_dataframe[
+            "delta_elqi"
+        ]
+        .dropna()
+        .abs()
+    )
+
+    if finite_values.empty:
+
+        max_abs = 10.0
+
+    else:
+
+        max_abs = max(
+            5.0,
+
+            float(
+                finite_values.max()
+            )
+        )
+
+    x_centers = (
+        degradation_dataframe
+        .groupby(
+            "column"
+        )[
+            "center_x"
+        ]
+        .first()
+        .sort_index()
+        .to_numpy()
+    )
+
+    y_centers = (
+        degradation_dataframe
+        .groupby(
+            "row"
+        )[
+            "center_y"
+        ]
+        .first()
+        .sort_index()
+        .to_numpy()
+    )
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Heatmap(
+            x=x_centers,
+
+            y=y_centers,
+
+            z=z,
+
+            zmin=-max_abs,
+
+            zmax=max_abs,
+
+            zmid=0,
+
+            colorscale="RdYlGn",
+
+            colorbar=dict(
+                title="Δ ELQI"
+            ),
+
+            customdata=(
+                customdata
+            ),
+
+            hovertemplate=(
+                "Zone: %{customdata[0]}"
+                "<br>Previous ELQI: "
+                "%{customdata[1]:.1f}"
+                "<br>Current ELQI: "
+                "%{customdata[2]:.1f}"
+                "<br>Δ ELQI: %{z:.1f}"
+                "<br>Status: "
+                "%{customdata[3]}"
+                "<br>Confidence: "
+                "%{customdata[4]:.0%}"
+                "<br>Rounds: "
+                "%{customdata[5]}"
+                " → %{customdata[6]}"
+                "<extra></extra>"
+            )
+        )
+    )
+
+    unreliable = (
+        degradation_dataframe[
+            degradation_dataframe[
+                "degradation_status"
+            ]
+            ==
+            "Độ tin cậy thấp"
+        ]
+    )
+
+    if not unreliable.empty:
+
+        fig.add_trace(
+            go.Scatter(
+                x=(
+                    unreliable[
+                        "center_x"
+                    ]
+                ),
+
+                y=(
+                    unreliable[
+                        "center_y"
+                    ]
+                ),
+
+                mode="text",
+
+                text=[
+                    "⚠"
+                    for _
+                    in range(
+                        len(
+                            unreliable
+                        )
+                    )
+                ],
+
+                hoverinfo="skip",
+
+                name="Low confidence"
+            )
+        )
+
+    if sink is not None:
+
+        fig.add_trace(
+            go.Scatter(
+                x=[sink.x],
+
+                y=[sink.y],
+
+                mode="markers+text",
+
+                marker=dict(
+                    symbol="star",
+                    size=18
+                ),
+
+                text=["SINK"],
+
+                textposition=(
+                    "top center"
+                ),
+
+                name="Sink"
+            )
+        )
+
+    width = float(
+        config[
+            "network"
+        ][
+            "width_m"
+        ]
+    )
+
+    height = float(
+        config[
+            "network"
+        ][
+            "height_m"
+        ]
+    )
+
+    fig.update_layout(
+        title=(
+            "Environmental Quality "
+            "Degradation Map"
+        ),
+
+        xaxis_title="X (m)",
+
+        yaxis_title="Y (m)",
+
+        height=700
+    )
+
+    fig.update_xaxes(
+        range=[
+            0,
+            width
+        ]
+    )
+
+    fig.update_yaxes(
+        range=[
+            0,
+            height
+        ],
+
+        scaleanchor="x",
+
+        scaleratio=1
+    )
+
+    return fig
+
 def create_indicator_heatmap(
     snapshot,
     sensor_type: str,

@@ -22,6 +22,13 @@ from data.generator import (
 from environment.collector import (
     EnvironmentalDataCollector
 )
+from environment.analyzer import (
+    EnvironmentalAnalyzer
+)
+from environment.degradation import (
+    ZoneHistoryTracker
+)
+
 
 
 @dataclass
@@ -160,21 +167,94 @@ class WSNSimulator:
                 EnvironmentalDataCollector()
             )
 
+            self.environment_analyzer = (
+                EnvironmentalAnalyzer(
+                    config
+                )
+            )
+
+            self.zone_history_tracker = (
+                ZoneHistoryTracker()
+            )
+
+            self.environment_analysis_interval = int(
+                config[
+                    "environment"
+                ].get(
+                    "analysis_interval_rounds",
+                    10
+                )
+            )
+
         else:
 
             self.environment_generator = None
 
             self.environment_collector = None
 
+            self.environment_analyzer = None
+
+            self.zone_history_tracker = None
+
+            self.environment_analysis_interval = 10
+
         self.history = []
         self.fnd_round = None
         self.hnd_round = None
         self.lnd_round = None
 
+        radio_config = config.get(
+            "radio",
+            {}
+        )
+
+        self.data_rate_bps = float(
+            radio_config.get(
+                "data_rate_bps",
+                250000
+            )
+        )
+
+        self.processing_delay_ms_per_hop = float(
+            radio_config.get(
+                "processing_delay_ms_per_hop",
+                1.0
+            )
+        )
+
+        self.propagation_speed_m_s = float(
+            radio_config.get(
+                "propagation_speed_m_s",
+                300000000
+            )
+        )
+
+        self.total_transmission_time_ms = 0.0
+        self.total_processing_delay_ms = 0.0
+        self.total_propagation_delay_ms = 0.0
+
+        # Actual traffic over wireless links.
+        # A 128-byte packet over 5 hops contributes
+        # 5 * 128 bytes here.
+        self.total_link_tx_bytes = 0
+        self.total_link_rx_bytes = 0
+
+        self.lifetime_snapshots = {
+            "FND": None,
+            "HND": None,
+            "LND": None
+        }
+
+        self.first_disconnection_round = None
+        self.connectivity_90_round = None
+        self.connectivity_50_round = None
+        self.zero_connectivity_round = None
+
         self.sensor_map = {
             sensor.node_id: sensor
             for sensor in network.sensors
         }
+
 
     def _active_graph(self) -> nx.Graph:
         """
@@ -398,19 +478,75 @@ class WSNSimulator:
             sensor_id
         ]
 
-        consumed = sensor.consume_energy(
-            amount_j=amount_j,
+        was_alive = (
+            sensor.is_alive()
+        )
 
-            energy_threshold_ratio=(
-                self.energy_threshold_ratio
+        actual_consumed = (
+            sensor.consume_energy(
+                amount_j=amount_j,
+
+                energy_threshold_ratio=(
+                    self.energy_threshold_ratio
+                )
             )
         )
 
         self.total_energy_consumed_j += (
-            consumed
+            actual_consumed
         )
 
-        return consumed
+        if (
+            was_alive
+            and
+            not sensor.is_alive()
+            and
+            sensor.death_round is None
+        ):
+
+            sensor.death_round = (
+                self.current_round
+            )
+
+        return actual_consumed
+
+    def _link_delay_components(
+        self,
+        packet_size_bytes: int,
+        distance_m: float
+    ) -> tuple[float, float, float]:
+
+        packet_bits = (
+            packet_size_bytes
+            * 8
+        )
+
+        transmission_ms = (
+            packet_bits
+            /
+            self.data_rate_bps
+            *
+            1000
+        )
+
+        propagation_ms = (
+            distance_m
+            /
+            self.propagation_speed_m_s
+            *
+            1000
+        )
+
+        processing_ms = (
+            self.processing_delay_ms_per_hop
+        )
+
+        return (
+            transmission_ms,
+            propagation_ms,
+            processing_ms
+        )
+
 
     def transmit_from_sensor(
         self,
@@ -481,6 +617,30 @@ class WSNSimulator:
                 ]["distance"]
             )
 
+            (
+                transmission_ms,
+                propagation_ms,
+                processing_ms
+            ) = self._link_delay_components(
+                packet_size_bytes=(
+                    packet.payload_size_bytes
+                ),
+
+                distance_m=distance
+            )
+
+            packet.transmission_time_ms += (
+                transmission_ms
+            )
+
+            packet.propagation_delay_ms += (
+                propagation_ms
+            )
+
+            packet.processing_delay_ms += (
+                processing_ms
+            )
+
             # ------------------------
             # TRANSMISSION ENERGY
             # ------------------------
@@ -545,11 +705,23 @@ class WSNSimulator:
                     consumed
                 )
 
+                self.total_link_tx_bytes += (
+                    packet.payload_size_bytes
+                )
+
+                sender.transmitted_bytes += (
+                    packet.payload_size_bytes
+                )
+
                 if sender_id == source_id:
                     sender.sent_packets += 1
 
                 else:
                     sender.forwarded_packets += 1
+
+                    sender.forwarded_bytes += (
+                        packet.payload_size_bytes
+                    )
 
             # ------------------------
             # RECEPTION ENERGY
@@ -614,18 +786,48 @@ class WSNSimulator:
 
                 receiver.received_packets += 1
 
+                receiver.received_bytes += (
+                    packet.payload_size_bytes
+                )
+
+                self.total_link_rx_bytes += (
+                    packet.payload_size_bytes
+                )
+
+            else:
+
+                self.total_link_rx_bytes += (
+                    packet.payload_size_bytes
+                )
+
         # Sink successfully received packet
 
         packet.delivered = True
 
         packet.delay_ms = (
-            packet.hop_count
-            * self.per_hop_delay_ms
+            packet.transmission_time_ms
+            +
+            packet.propagation_delay_ms
+            +
+            packet.processing_delay_ms
+        )
+
+        self.total_transmission_time_ms += (
+            packet.transmission_time_ms
+        )
+
+        self.total_propagation_delay_ms += (
+            packet.propagation_delay_ms
+        )
+
+        self.total_processing_delay_ms += (
+            packet.processing_delay_ms
         )
 
         self.total_delay_ms += (
             packet.delay_ms
         )
+
 
         self.total_delivered_hops += (
             packet.hop_count
@@ -697,48 +899,480 @@ class WSNSimulator:
 
         self._update_lifetime_metrics()
 
+        self._update_connectivity_lifetime_metrics()
+
+        self._record_environment_snapshot()
+
         self._record_history()
+
+    def _record_environment_snapshot(
+        self
+    ) -> None:
+
+        if not self.environment_enabled:
+            return
+
+        if (
+            self.environment_collector
+            is None
+        ):
+            return
+
+        if (
+            not self.environment_collector
+            .received_records
+        ):
+            return
+
+        should_record = (
+            self.current_round == 1
+            or
+            self.current_round
+            %
+            self.environment_analysis_interval
+            ==
+            0
+        )
+
+        if not should_record:
+            return
+
+        zone_snapshot = (
+            self.environment_analyzer
+            .build_zone_snapshot(
+                collector=(
+                    self.environment_collector
+                ),
+
+                current_round=(
+                    self.current_round
+                )
+            )
+        )
+
+        self.zone_history_tracker.record_snapshot(
+            zone_dataframe=(
+                zone_snapshot
+            ),
+
+            round_number=(
+                self.current_round
+            )
+        )
+
+    def _create_lifetime_snapshot(
+        self
+    ) -> dict:
+
+        return {
+            "round":
+                self.current_round,
+
+            "generated_packets":
+                self.generated_packets,
+
+            "delivered_packets":
+                self.delivered_packets,
+
+            "dropped_packets":
+                self.dropped_packets,
+
+            "delivered_bytes":
+                self.delivered_bytes,
+
+            "network_tx_bytes":
+                self.total_link_tx_bytes,
+
+            "total_energy_consumed_j":
+                self.total_energy_consumed_j
+        }
 
     def _update_lifetime_metrics(
         self
     ) -> None:
 
-        dead_count = sum(
-            1
-            for sensor in self.network.sensors
-            if not sensor.is_alive()
-        )
-
-        total = len(
+        total_nodes = len(
             self.network.sensors
         )
 
+        dead_count = sum(
+            1
+            for sensor
+            in self.network.sensors
+            if not sensor.is_alive()
+        )
+
+        # First Node Death
         if (
             dead_count >= 1
-            and self.fnd_round is None
+            and
+            self.fnd_round is None
         ):
 
             self.fnd_round = (
                 self.current_round
             )
 
+            self.lifetime_snapshots[
+                "FND"
+            ] = (
+                self._create_lifetime_snapshot()
+            )
+
+        # Half Nodes Dead
+        half_nodes = (
+            total_nodes + 1
+        ) // 2
+
         if (
-            dead_count >= ceil(total / 2)
-            and self.hnd_round is None
+            dead_count >= half_nodes
+            and
+            self.hnd_round is None
         ):
 
             self.hnd_round = (
                 self.current_round
             )
 
+            self.lifetime_snapshots[
+                "HND"
+            ] = (
+                self._create_lifetime_snapshot()
+            )
+
+        # Last Node Death
         if (
-            dead_count >= total
-            and self.lnd_round is None
+            dead_count >= total_nodes
+            and
+            self.lnd_round is None
         ):
 
             self.lnd_round = (
                 self.current_round
             )
+
+            self.lifetime_snapshots[
+                "LND"
+            ] = (
+                self._create_lifetime_snapshot()
+            )
+
+    def _minimum_hop_connected_ids(
+        self
+    ) -> set[int]:
+
+        graph = (
+            self.network.graph.copy()
+        )
+
+        dead_nodes = [
+            sensor.node_id
+            for sensor
+            in self.network.sensors
+            if not sensor.is_alive()
+        ]
+
+        graph.remove_nodes_from(
+            dead_nodes
+        )
+
+        sink_id = (
+            self.network.sink.node_id
+        )
+
+        if sink_id not in graph:
+            return set()
+
+        component = (
+            nx.node_connected_component(
+                graph,
+                sink_id
+            )
+        )
+
+        return {
+            node_id
+            for node_id in component
+            if node_id != sink_id
+        }
+
+    def _ecmhr_connected_ids_for_threshold(
+        self,
+        threshold_ratio: float
+    ) -> set[int]:
+
+        sink_id = (
+            self.network.sink.node_id
+        )
+
+        alive_sensors = [
+            sensor
+            for sensor
+            in self.network.sensors
+            if sensor.is_alive()
+        ]
+
+        eligible_relays = {
+            sensor.node_id
+            for sensor
+            in alive_sensors
+            if (
+                sensor.energy_ratio()
+                >
+                threshold_ratio
+            )
+        }
+
+        relay_graph = (
+            self.network.graph.subgraph(
+                eligible_relays
+                |
+                {sink_id}
+            )
+            .copy()
+        )
+
+        if sink_id not in relay_graph:
+            return set()
+
+        sink_component = (
+            nx.node_connected_component(
+                relay_graph,
+                sink_id
+            )
+        )
+
+        connected = set()
+
+        for sensor in alive_sensors:
+
+            source_id = (
+                sensor.node_id
+            )
+
+            # Normal eligible source.
+            if source_id in sink_component:
+
+                connected.add(
+                    source_id
+                )
+
+                continue
+
+            # LOW_ENERGY source may still send its
+            # own data through a valid relay.
+            for neighbor in (
+                self.network.graph.neighbors(
+                    source_id
+                )
+            ):
+
+                if (
+                    neighbor == sink_id
+                    or
+                    neighbor
+                    in sink_component
+                ):
+
+                    connected.add(
+                        source_id
+                    )
+
+                    break
+
+        return connected
+
+    def get_connected_alive_sensor_ids(
+        self
+    ) -> set[int]:
+
+        if (
+            self.routing_algorithm
+            ==
+            "minimum_hop"
+        ):
+
+            return (
+                self._minimum_hop_connected_ids()
+            )
+
+        normal_connected = (
+            self._ecmhr_connected_ids_for_threshold(
+                self.energy_threshold_ratio
+            )
+        )
+
+        if not self.allow_emergency_mode:
+
+            return normal_connected
+
+        emergency_connected = (
+            self._ecmhr_connected_ids_for_threshold(
+                self.emergency_threshold_ratio
+            )
+        )
+
+        return (
+            normal_connected
+            |
+            emergency_connected
+        )
+
+    def get_connectivity_metrics(
+        self
+    ) -> dict:
+
+        alive_ids = {
+            sensor.node_id
+            for sensor
+            in self.network.sensors
+            if sensor.is_alive()
+        }
+
+        connected_ids = (
+            self.get_connected_alive_sensor_ids()
+        )
+
+        alive_count = len(
+            alive_ids
+        )
+
+        connected_count = len(
+            connected_ids
+        )
+
+        disconnected_count = (
+            alive_count
+            -
+            connected_count
+        )
+
+        if alive_count > 0:
+
+            ratio = (
+                connected_count
+                /
+                alive_count
+            )
+
+        else:
+
+            ratio = 0.0
+
+        return {
+            "connected_alive_nodes":
+                connected_count,
+
+            "disconnected_alive_nodes":
+                disconnected_count,
+
+            "connectivity_ratio":
+                ratio
+        }
+
+    def _update_connectivity_lifetime_metrics(
+        self
+    ) -> None:
+
+        metrics = (
+            self.get_connectivity_metrics()
+        )
+
+        alive = (
+            metrics[
+                "connected_alive_nodes"
+            ]
+            +
+            metrics[
+                "disconnected_alive_nodes"
+            ]
+        )
+
+        connected = (
+            metrics[
+                "connected_alive_nodes"
+            ]
+        )
+
+        ratio = (
+            metrics[
+                "connectivity_ratio"
+            ]
+        )
+
+        if (
+            alive > 0
+            and
+            ratio < 1.0
+            and
+            self.first_disconnection_round
+            is None
+        ):
+
+            self.first_disconnection_round = (
+                self.current_round
+            )
+
+        if (
+            alive > 0
+            and
+            ratio < 0.90
+            and
+            self.connectivity_90_round
+            is None
+        ):
+
+            self.connectivity_90_round = (
+                self.current_round
+            )
+
+        if (
+            alive > 0
+            and
+            ratio < 0.50
+            and
+            self.connectivity_50_round
+            is None
+        ):
+
+            self.connectivity_50_round = (
+                self.current_round
+            )
+
+        if (
+            alive > 0
+            and
+            connected == 0
+            and
+            self.zero_connectivity_round
+            is None
+        ):
+
+            self.zero_connectivity_round = (
+                self.current_round
+            )
+
+    def _snapshot_value(
+        self,
+        milestone: str,
+        key: str,
+        default=None
+    ):
+
+        snapshot = (
+            self.lifetime_snapshots.get(
+                milestone
+            )
+        )
+
+        if snapshot is None:
+            return default
+
+        return snapshot.get(
+            key,
+            default
+        )
+
 
     def run(
         self,
@@ -862,6 +1496,44 @@ class WSNSimulator:
             self.route_manager.get_metrics()
         )
 
+        connectivity = (
+            self.get_connectivity_metrics()
+        )
+
+        if self.delivered_packets > 0:
+
+            average_transmission_time_ms = (
+                self.total_transmission_time_ms
+                /
+                self.delivered_packets
+            )
+
+        else:
+
+            average_transmission_time_ms = 0.0
+
+        link_data_rate_kbps = (
+            self.data_rate_bps
+            /
+            1000
+        )
+
+        network_load_mb = (
+            self.total_link_tx_bytes
+            /
+            (
+                1024 ** 2
+            )
+        )
+
+        delivered_data_mb = (
+            self.delivered_bytes
+            /
+            (
+                1024 ** 2
+            )
+        )
+
         return {
             "round":
                 self.current_round,
@@ -952,7 +1624,88 @@ class WSNSimulator:
             "route_cache_hit_ratio":
                 routing_metrics[
                     "route_cache_hit_ratio"
-                ]
+                ],
+
+            "link_data_rate_bps":
+                self.data_rate_bps,
+
+            "average_transmission_time_ms":
+                average_transmission_time_ms,
+
+            "delivered_data_mb":
+                delivered_data_mb,
+
+            "network_load_mb":
+                network_load_mb,
+
+            "network_tx_bytes":
+                self.total_link_tx_bytes,
+
+            "network_rx_bytes":
+                self.total_link_rx_bytes,
+
+            "connected_alive_nodes":
+                connectivity[
+                    "connected_alive_nodes"
+                ],
+
+            "disconnected_alive_nodes":
+                connectivity[
+                    "disconnected_alive_nodes"
+                ],
+
+            "routing_connectivity_ratio":
+                connectivity[
+                    "connectivity_ratio"
+                ],
+
+            "first_disconnection_round":
+                self.first_disconnection_round,
+
+            "connectivity_90_round":
+                self.connectivity_90_round,
+
+            "connectivity_50_round":
+                self.connectivity_50_round,
+
+            "zero_connectivity_round":
+                self.zero_connectivity_round,
+
+            "delivered_bytes_at_fnd":
+                self._snapshot_value(
+                    "FND",
+                    "delivered_bytes"
+                ),
+
+            "delivered_bytes_at_hnd":
+                self._snapshot_value(
+                    "HND",
+                    "delivered_bytes"
+                ),
+
+            "delivered_bytes_at_lnd":
+                self._snapshot_value(
+                    "LND",
+                    "delivered_bytes"
+                ),
+
+            "delivered_packets_at_fnd":
+                self._snapshot_value(
+                    "FND",
+                    "delivered_packets"
+                ),
+
+            "delivered_packets_at_hnd":
+                self._snapshot_value(
+                    "HND",
+                    "delivered_packets"
+                ),
+
+            "delivered_packets_at_lnd":
+                self._snapshot_value(
+                    "LND",
+                    "delivered_packets"
+                )
         }
 
     def print_summary(self) -> None:
@@ -1064,4 +1817,123 @@ class WSNSimulator:
             f"{metrics['lnd_round']}"
         )
 
-        print("=" * 50)
+        print()
+        print("DATA TRANSFER")
+        print("-" * 50)
+
+        print(
+            f"PHY data rate: "
+            f"{metrics['link_data_rate_bps'] / 1000:.2f} kbps"
+        )
+
+        print(
+            f"Actual throughput: "
+            f"{metrics['throughput_bps'] / 1000:.2f} kbps"
+        )
+
+        print(
+            f"Average TX time: "
+            f"{metrics['average_transmission_time_ms']:.3f} ms"
+        )
+
+        print(
+            f"Average E2E delay: "
+            f"{metrics['average_delay_ms']:.3f} ms"
+        )
+
+        print(
+            f"Delivered data: "
+            f"{metrics['delivered_data_mb']:.3f} MB"
+        )
+
+        print(
+            f"Total network TX load: "
+            f"{metrics['network_load_mb']:.3f} MB"
+        )
+
+        print()
+        print("CONNECTIVITY")
+        print("-" * 50)
+
+        print(
+            f"Connected alive nodes: "
+            f"{metrics['connected_alive_nodes']}"
+        )
+
+        print(
+            f"Disconnected alive nodes: "
+            f"{metrics['disconnected_alive_nodes']}"
+        )
+
+        print(
+            f"Connectivity: "
+            f"{metrics['routing_connectivity_ratio'] * 100:.2f}%"
+        )
+
+        print(
+            f"First disconnection: "
+            f"{metrics['first_disconnection_round']}"
+        )
+
+        print(
+            f"90% connectivity round: "
+            f"{metrics['connectivity_90_round']}"
+        )
+
+        print(
+            f"50% connectivity round: "
+            f"{metrics['connectivity_50_round']}"
+        )
+
+        print()
+        print("DATA UNTIL NETWORK LIFETIME MILESTONES")
+        print("-" * 50)
+
+        for milestone in [
+            "FND",
+            "HND",
+            "LND"
+        ]:
+
+            snapshot = (
+                self.lifetime_snapshots[
+                    milestone
+                ]
+            )
+
+            if snapshot is None:
+
+                print(
+                    f"{milestone}: Not reached"
+                )
+
+                continue
+
+            delivered_mb = (
+                snapshot[
+                    "delivered_bytes"
+                ]
+                /
+                (
+                    1024 ** 2
+                )
+            )
+
+            network_mb = (
+                snapshot[
+                    "network_tx_bytes"
+                ]
+                /
+                (
+                    1024 ** 2
+                )
+            )
+
+            print(
+                f"{milestone}: "
+                f"Round {snapshot['round']} | "
+                f"Delivered {delivered_mb:.2f} MB | "
+                f"Network TX {network_mb:.2f} MB"
+            )
+
+        print("=" * 50)
