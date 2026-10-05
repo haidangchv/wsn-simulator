@@ -63,7 +63,7 @@ def main():
     )
 
     simulator.set_routing_algorithm(
-        "ecmhr"
+        "lb_ecmhr"
     )
 
     source_id = 1

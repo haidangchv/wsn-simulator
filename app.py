@@ -299,6 +299,129 @@ show_edges = (
     )
 )
 
+st.sidebar.divider()
+
+st.sidebar.subheader(
+    "🧭 Routing Configuration"
+)
+
+routing_options = {
+    "Minimum-Hop BFS":
+        "minimum_hop",
+    "LB-ECMHR (Load Balanced)":
+        "lb_ecmhr"
+}
+
+configured_algorithm = current_config.get(
+    "routing",
+    {}
+).get(
+    "algorithm",
+    "lb_ecmhr"
+)
+
+algo_label = next(
+    (
+        label
+        for label, val in routing_options.items()
+        if val == configured_algorithm
+    ),
+    "LB-ECMHR (Load Balanced)"
+)
+
+selected_label = st.sidebar.selectbox(
+    "Routing Algorithm",
+    options=list(
+        routing_options.keys()
+    ),
+    index=list(
+        routing_options.keys()
+    ).index(
+        algo_label
+    )
+)
+
+selected_routing = routing_options[
+    selected_label
+]
+
+load_window = 20
+overload_factor = 2.0
+recovery_factor = 1.2
+max_extra_hops = 1
+
+if selected_routing == "lb_ecmhr":
+
+    st.sidebar.markdown(
+        "### ⚖️ Load Balancing"
+    )
+
+    lb_defaults = current_config.get(
+        "routing",
+        {}
+    ).get(
+        "lb_ecmhr",
+        {}
+    )
+
+    load_window = st.sidebar.slider(
+        "Load Window (rounds)",
+        min_value=5,
+        max_value=100,
+        value=int(
+            lb_defaults.get(
+                "load_window_rounds",
+                20
+            )
+        ),
+        step=5
+    )
+
+    overload_factor = st.sidebar.slider(
+        "Overload Factor",
+        min_value=1.2,
+        max_value=4.0,
+        value=float(
+            lb_defaults.get(
+                "overload_factor",
+                2.0
+            )
+        ),
+        step=0.1
+    )
+
+    recovery_factor = st.sidebar.slider(
+        "Recovery Factor",
+        min_value=0.5,
+        max_value=1.9,
+        value=float(
+            lb_defaults.get(
+                "recovery_factor",
+                1.2
+            )
+        ),
+        step=0.1
+    )
+
+    max_extra_hops = st.sidebar.slider(
+        "Maximum Extra Hops",
+        min_value=0,
+        max_value=3,
+        value=int(
+            lb_defaults.get(
+                "max_extra_hops",
+                1
+            )
+        ),
+        step=1
+    )
+
+    if recovery_factor >= overload_factor:
+        st.sidebar.error(
+            "Recovery Factor must be smaller than Overload Factor."
+        )
+        st.stop()
+
 
 # -----------------------------------------
 # APPLY CONFIGURATION
@@ -344,6 +467,21 @@ if st.sidebar.button(
     ] = (
         energy_threshold / 100
     )
+
+    new_config[
+        "routing"
+    ][
+        "algorithm"
+    ] = selected_routing
+
+    if selected_routing == "lb_ecmhr":
+        if "lb_ecmhr" not in new_config["routing"]:
+            new_config["routing"]["lb_ecmhr"] = {}
+        lb_config = new_config["routing"]["lb_ecmhr"]
+        lb_config["load_window_rounds"] = int(load_window)
+        lb_config["overload_factor"] = float(overload_factor)
+        lb_config["recovery_factor"] = float(recovery_factor)
+        lb_config["max_extra_hops"] = int(max_extra_hops)
 
     network, simulator = (
         create_simulation(
@@ -452,130 +590,6 @@ if not hasattr(simulator, "set_routing_algorithm"):
         simulator
     )
 
-st.sidebar.divider()
-
-st.sidebar.subheader(
-    "🧭 Routing"
-)
-
-routing_options = {
-    "Minimum-Hop BFS":
-        "minimum_hop",
-
-    "ECMHR":
-        "ecmhr"
-}
-
-current_algorithm = getattr(
-    simulator,
-    "routing_algorithm",
-    "minimum_hop"
-)
-
-current_label = next(
-    (
-        label
-        for label, value
-        in routing_options.items()
-        if value == current_algorithm
-    ),
-    "Minimum-Hop BFS"
-)
-
-selected_label = (
-    st.sidebar.selectbox(
-        "Routing Algorithm",
-        options=list(
-            routing_options.keys()
-        ),
-        index=list(
-            routing_options.keys()
-        ).index(
-            current_label
-        )
-    )
-)
-
-selected_algorithm = (
-    routing_options[
-        selected_label
-    ]
-)
-
-if (
-    selected_algorithm
-    != getattr(simulator, "routing_algorithm", None)
-):
-
-    if hasattr(simulator, "set_routing_algorithm"):
-        simulator.set_routing_algorithm(
-            selected_algorithm
-        )
-    else:
-        simulator.routing_algorithm = (
-            selected_algorithm
-        )
-
-    st.session_state.selected_route = (
-        None
-    )
-    st.session_state.find_route_searched = (
-        False
-    )
-
-if (
-    getattr(simulator, "routing_algorithm", "minimum_hop")
-    == "ecmhr"
-):
-
-    st.sidebar.subheader(
-        "🚨 ECMHR Emergency Mode"
-    )
-
-    emergency_enabled = (
-        st.sidebar.checkbox(
-            "Allow Emergency Routing",
-            value=getattr(
-                simulator,
-                "allow_emergency_mode",
-                False
-            )
-        )
-    )
-
-    emergency_threshold = (
-        st.sidebar.slider(
-            "Emergency Threshold (%)",
-            min_value=1,
-            max_value=19,
-            value=int(
-                getattr(
-                    simulator,
-                    "emergency_threshold_ratio",
-                    0.10
-                )
-                * 100
-            )
-        )
-    )
-
-    simulator.allow_emergency_mode = (
-        emergency_enabled
-    )
-
-    simulator.emergency_threshold_ratio = (
-        emergency_threshold / 100
-    )
-
-    if hasattr(simulator, "route_manager"):
-
-        simulator.route_manager.allow_emergency_mode = (
-            emergency_enabled
-        )
-
-        simulator.route_manager.emergency_threshold_ratio = (
-            emergency_threshold / 100
-        )
 
 
 
@@ -648,12 +662,12 @@ else:
 # =========================================
 
 algorithm_name = (
-    "ECMHR"
+    "LB-ECMHR"
     if getattr(
         simulator,
         "routing_algorithm",
         "minimum_hop"
-    ) == "ecmhr"
+    ) == "lb_ecmhr"
     else "Minimum-Hop BFS"
 )
 
@@ -767,12 +781,11 @@ with route_col2:
 
         if getattr(
             route,
-            "emergency_mode",
+            "used_overload_fallback",
             False
         ):
             st.warning(
-                "⚠️ No normal ECMHR route was available. "
-                "The network is using Emergency Routing."
+                "⚠️ Using Overload Fallback Route: no balanced detour available."
             )
 
         path_elements = []
@@ -803,23 +816,11 @@ with route_col2:
             " → ".join(path_elements)
         )
 
-        threshold_used = getattr(
-            route,
-            "threshold_ratio_used",
-            None
-        )
-
-        if threshold_used is not None:
-            st.caption(
-                f"Relay energy threshold used: "
-                f"{threshold_used * 100:.0f}%"
-            )
-
-        if low_energy_relays and not getattr(route, "emergency_mode", False):
+        if low_energy_relays:
             st.warning(
                 f"⚠️ Route traverses {len(low_energy_relays)} LOW_ENERGY relay(s): "
                 f"{', '.join(f'Sensor {n}' for n in low_energy_relays)}. "
-                "Switch to ECMHR to reroute and protect low-battery nodes!"
+                "Switch to LB-ECMHR to reroute and protect low-battery nodes!"
             )
 
         r1, r2, r3 = st.columns(3)
@@ -829,10 +830,45 @@ with route_col2:
             route.hop_count
         )
 
+        baseline_hops = getattr(
+            route,
+            "baseline_hop_count",
+            route.hop_count
+        )
+        detour_hops = getattr(
+            route,
+            "detour_hops",
+            0
+        )
+
         r2.metric(
+            "Baseline Hops",
+            f"{baseline_hops} (+{detour_hops})"
+        )
+
+        r3.metric(
             "Route Distance",
             f"{route.total_distance_m:.2f} m"
         )
+
+        r4, r5, r6 = st.columns(3)
+
+        max_load_val = getattr(
+            route,
+            "max_relay_load",
+            None
+        )
+
+        if max_load_val is not None:
+            r4.metric(
+                "Max Relay Load",
+                f"{max_load_val:.2f}"
+            )
+        else:
+            r4.metric(
+                "Max Relay Load",
+                "N/A"
+            )
 
         bottleneck_val = getattr(
             route,
@@ -841,15 +877,25 @@ with route_col2:
         )
 
         if bottleneck_val is not None:
-            r3.metric(
+            r5.metric(
                 "Bottleneck Energy",
                 f"{bottleneck_val:.4f} J"
             )
         else:
-            r3.metric(
+            r5.metric(
                 "Bottleneck Energy",
                 "N/A"
             )
+
+        used_fallback = getattr(
+            route,
+            "used_overload_fallback",
+            False
+        )
+        r6.metric(
+            "Overload Fallback",
+            "Yes" if used_fallback else "No"
+        )
 
     elif st.session_state.get("find_route_searched", False):
 
@@ -858,15 +904,11 @@ with route_col2:
             selected_source
         )
 
-        if getattr(simulator, "routing_algorithm", "minimum_hop") == "ecmhr":
+        if getattr(simulator, "routing_algorithm", "minimum_hop") == "lb_ecmhr":
             st.error(
-                f"❌ No valid ECMHR route found for Sensor {searched_source} to Sink! "
+                f"❌ No valid LB-ECMHR route found for Sensor {searched_source} to Sink! "
                 "All relay paths to the Sink are blocked by LOW_ENERGY (≤ 20%) or DEAD nodes."
             )
-            if not getattr(simulator, "allow_emergency_mode", False):
-                st.info(
-                    "💡 Tip: Enable **'Allow Emergency Routing'** in the sidebar to permit routing through relays with lower remaining energy."
-                )
         else:
             st.error(
                 f"❌ No route found from Sensor {searched_source} to Sink."
@@ -884,6 +926,16 @@ with route_col2:
 # NETWORK MAP
 # =========================================
 
+overloaded_nodes = set()
+if (
+    getattr(simulator, "routing_algorithm", None) == "lb_ecmhr"
+    and hasattr(simulator, "route_manager")
+    and hasattr(simulator.route_manager, "load_tracker")
+):
+    overloaded_nodes = (
+        simulator.route_manager.load_tracker.overloaded_nodes
+    )
+
 network_figure = (
     create_network_figure(
         network=network,
@@ -891,7 +943,8 @@ network_figure = (
         show_edges=show_edges,
         edge_geometry=st.session_state.get(
             "edge_geometry"
-        )
+        ),
+        overloaded_nodes=overloaded_nodes
     )
 )
 
@@ -1376,6 +1429,78 @@ rm4.metric(
     )
 )
 
+if getattr(simulator, "routing_algorithm", None) == "lb_ecmhr":
+
+    st.subheader(
+        "⚖️ Relay Load Balancing"
+    )
+
+    lb_metrics = (
+        simulator.get_metrics()
+    )
+
+    l1, l2, l3, l4 = (
+        st.columns(4)
+    )
+
+    l1.metric(
+        "Active Relays",
+        lb_metrics.get(
+            "active_relay_count",
+            0
+        )
+    )
+
+    l2.metric(
+        "Overloaded Relays",
+        lb_metrics.get(
+            "overloaded_relay_count",
+            0
+        )
+    )
+
+    l3.metric(
+        "Relay Load CV",
+        (
+            f"{lb_metrics.get('relay_load_cv', 0.0):.3f}"
+        )
+    )
+
+    l4.metric(
+        "Max Relay Load",
+        lb_metrics.get(
+            "max_relay_load",
+            0
+        )
+    )
+
+    r1, r2, r3 = (
+        st.columns(3)
+    )
+
+    r1.metric(
+        "Detour Routes",
+        lb_metrics.get(
+            "detour_route_count",
+            0
+        )
+    )
+
+    r2.metric(
+        "Overload Fallbacks",
+        lb_metrics.get(
+            "overload_fallback_route_count",
+            0
+        )
+    )
+
+    r3.metric(
+        "Avg Route Load",
+        (
+            f"{lb_metrics.get('average_route_max_relay_load', 0.0):.2f}"
+        )
+    )
+
 
 # =========================================
 # PACKET STATISTICS
@@ -1626,6 +1751,53 @@ if simulator.history:
             delivered_chart
         )
 
+    chart7, chart8 = (
+        st.columns(2)
+    )
+
+    with chart7:
+
+        st.markdown(
+            "**Relay Load Balance**"
+        )
+
+        load_cols = [
+            c
+            for c in [
+                "relay_load_cv",
+                "overloaded_relay_count"
+            ]
+            if c in history_df.columns
+        ]
+
+        if load_cols:
+            st.line_chart(
+                history_df[load_cols]
+            )
+
+    with chart8:
+
+        st.markdown(
+            "**Network Energy State**"
+        )
+
+        energy_state_cols = [
+            c
+            for c in [
+                "alive_nodes",
+                "low_energy_nodes",
+                "dead_nodes",
+                "connected_alive_nodes",
+                "disconnected_alive_nodes"
+            ]
+            if c in history_df.columns
+        ]
+
+        if energy_state_cols:
+            st.line_chart(
+                history_df[energy_state_cols]
+            )
+
 
 
 # =========================================
@@ -1649,7 +1821,7 @@ comparison_rounds = (
 )
 
 if st.button(
-    "Compare Minimum-Hop vs ECMHR"
+    "Compare Minimum-Hop vs LB-ECMHR"
 ):
 
     with st.spinner(
@@ -1675,12 +1847,19 @@ if st.button(
         "average_hop_count",
         "total_energy_consumed_j",
         "energy_efficiency_bits_per_j",
-        "fnd_round"
+        "fnd_round",
+        "relay_load_cv",
+        "overloaded_relay_count"
+    ]
+
+    valid_cols = [
+        col for col in display_columns
+        if col in comparison_df.columns
     ]
 
     st.dataframe(
         comparison_df[
-            display_columns
+            valid_cols
         ],
         use_container_width=True,
         hide_index=True
@@ -1700,6 +1879,41 @@ with st.expander(
     node_records = []
 
     for sensor in network.sensors:
+
+        recent_fwd = 0
+        load_fac = 0.0
+        is_ovld = False
+
+        if (
+            getattr(simulator, "routing_algorithm", None) == "lb_ecmhr"
+            and hasattr(simulator, "route_manager")
+            and hasattr(simulator.route_manager, "load_tracker")
+        ):
+            recent_fwd = (
+                simulator
+                .route_manager
+                .load_tracker
+                .get_recent_forwarded(
+                    sensor.node_id
+                )
+            )
+            load_fac = round(
+                simulator
+                .route_manager
+                .load_tracker
+                .get_load_factor(
+                    sensor.node_id
+                ),
+                2
+            )
+            is_ovld = (
+                simulator
+                .route_manager
+                .load_tracker
+                .is_overloaded(
+                    sensor.node_id
+                )
+            )
 
         node_records.append({
             "ID":
@@ -1741,7 +1955,16 @@ with st.expander(
                 sensor.forwarded_packets,
 
             "Received":
-                sensor.received_packets
+                sensor.received_packets,
+
+            "recent_forwarded":
+                recent_fwd,
+
+            "load_factor":
+                load_fac,
+
+            "overloaded":
+                is_ovld
         })
 
     node_df = pd.DataFrame(

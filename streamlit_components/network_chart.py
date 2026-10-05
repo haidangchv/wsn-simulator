@@ -73,7 +73,8 @@ def create_network_figure(
     network,
     route=None,
     show_edges=False,
-    edge_geometry=None
+    edge_geometry=None,
+    overloaded_nodes=None
 ):
     """
     Create an interactive Plotly visualization
@@ -83,6 +84,8 @@ def create_network_figure(
     sensors = network.sensors
     sink = network.sink
     graph = network.graph
+
+    overloaded_nodes = overloaded_nodes or set()
 
     sensor_map = {
         sensor.node_id: sensor
@@ -142,6 +145,10 @@ def create_network_figure(
             "color": "#2ca02c",
             "size": 7
         },
+        "OVERLOADED": {
+            "color": "#9467bd",
+            "size": 8
+        },
         "LOW_ENERGY": {
             "color": "#ffb000",
             "size": 8
@@ -152,6 +159,17 @@ def create_network_figure(
         }
     }
 
+    sensor_display_states = {}
+    for sensor in sensors:
+        if not sensor.is_alive():
+            sensor_display_states[sensor.node_id] = "DEAD"
+        elif sensor.node_id in overloaded_nodes:
+            sensor_display_states[sensor.node_id] = "OVERLOADED"
+        elif not sensor.relay_enabled:
+            sensor_display_states[sensor.node_id] = "LOW_ENERGY"
+        else:
+            sensor_display_states[sensor.node_id] = "ALIVE"
+
     for state, settings in (
         state_settings.items()
     ):
@@ -159,7 +177,7 @@ def create_network_figure(
         group = [
             sensor
             for sensor in sensors
-            if sensor.state == state
+            if sensor_display_states[sensor.node_id] == state
         ]
 
         if not group:
@@ -186,7 +204,7 @@ def create_network_figure(
                     (
                         f"Sensor {sensor.node_id}"
                         f"<br>Type: {sensor.sensor_type}"
-                        f"<br>State: {sensor.state}"
+                        f"<br>State: {sensor_display_states[sensor.node_id]}"
                         f"<br>Energy: "
                         f"{sensor.remaining_energy:.4f} J"
                         f"<br>Neighbors: "

@@ -56,7 +56,7 @@ def main():
     simulator = WSNSimulator(
         network=network,
         config=config,
-        routing_algorithm="ecmhr"
+        routing_algorithm="lb_ecmhr"
     )
 
     simulator.run(

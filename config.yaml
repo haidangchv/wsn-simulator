@@ -40,10 +40,29 @@ simulation:
   max_rounds: 1000
 
 routing:
-  algorithm: "minimum_hop"
+  algorithm: "lb_ecmhr"
 
-  allow_emergency_mode: false
-  emergency_threshold_ratio: 0.10
+  energy_threshold_ratio: 0.20
+
+  lb_ecmhr:
+    # Tải relay được tính trên bao nhiêu round gần nhất
+    load_window_rounds: 20
+
+    # Relay có tải >= 2 lần mức trung bình
+    # được xem là overloaded
+    overload_factor: 2.0
+
+    # Relay overloaded chỉ được phục hồi khi
+    # tải giảm xuống <= 1.2 lần trung bình
+    recovery_factor: 1.2
+
+    # Cho phép đi vòng tối đa 1 hop
+    # để tránh hotspot
+    max_extra_hops: 1
+
+    # Nếu không có đường tránh overload hợp lệ,
+    # vẫn dùng relay overloaded để duy trì connectivity
+    allow_overload_fallback: true
 
 sensor_types:
   temperature: 100

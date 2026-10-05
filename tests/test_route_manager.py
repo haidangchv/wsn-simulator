@@ -37,9 +37,7 @@ class RouteManagerMidRoundRerouteTest(
                 "energy_threshold_ratio": 0.20
             },
             "routing": {
-                "algorithm": "ecmhr",
-                "allow_emergency_mode": False,
-                "emergency_threshold_ratio": 0.10
+                "algorithm": "lb_ecmhr"
             }
         }
 
@@ -84,7 +82,7 @@ class RouteManagerMidRoundRerouteTest(
         self.route_manager = RouteManager(
             network=self.network,
             config=self.config,
-            algorithm="ecmhr"
+            algorithm="lb_ecmhr"
         )
 
     def test_mid_round_reroute_when_relay_energy_drops(

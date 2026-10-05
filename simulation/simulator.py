@@ -1,8 +1,5 @@
 from dataclasses import dataclass
 from math import ceil
-from routing.ecmhr import (
-    find_ecmhr_route
-)
 import networkx as nx
 
 from core.network import WirelessSensorNetwork
@@ -61,25 +58,24 @@ class WSNSimulator:
             )
         )
 
+        self.energy_threshold_ratio = float(
+            routing_config.get(
+                "energy_threshold_ratio",
+                config.get(
+                    "sensor",
+                    {}
+                ).get(
+                    "energy_threshold_ratio",
+                    0.20
+                )
+            )
+        )
+
         self.routing_algorithm = (
             routing_algorithm
             or routing_config.get(
                 "algorithm",
-                "minimum_hop"
-            )
-        )
-
-        self.allow_emergency_mode = (
-            routing_config.get(
-                "allow_emergency_mode",
-                False
-            )
-        )
-
-        self.emergency_threshold_ratio = (
-            routing_config.get(
-                "emergency_threshold_ratio",
-                0.10
+                "lb_ecmhr"
             )
         )
 
@@ -284,7 +280,7 @@ class WSNSimulator:
 
         supported = {
             "minimum_hop",
-            "ecmhr"
+            "lb_ecmhr"
         }
 
         if algorithm not in supported:
@@ -319,6 +315,11 @@ class WSNSimulator:
         if not source.is_alive():
             return None
 
+        if hasattr(self, "route_manager"):
+            return self.route_manager.get_route(
+                source_id
+            )
+
         if (
             self.routing_algorithm
             == "minimum_hop"
@@ -331,35 +332,6 @@ class WSNSimulator:
                 source_id=source_id,
                 sink_id=(
                     self.network.sink.node_id
-                )
-            )
-
-        if (
-            self.routing_algorithm
-            == "ecmhr"
-        ):
-
-            return find_ecmhr_route(
-                graph=self.network.graph,
-
-                sensor_map=self.sensor_map,
-
-                source_id=source_id,
-
-                sink_id=(
-                    self.network.sink.node_id
-                ),
-
-                energy_threshold_ratio=(
-                    self.energy_threshold_ratio
-                ),
-
-                allow_emergency_mode=(
-                    self.allow_emergency_mode
-                ),
-
-                emergency_threshold_ratio=(
-                    self.emergency_threshold_ratio
                 )
             )
 
@@ -1096,7 +1068,7 @@ class WSNSimulator:
             if node_id != sink_id
         }
 
-    def _ecmhr_connected_ids_for_threshold(
+    def _energy_constrained_connected_ids_for_threshold(
         self,
         threshold_ratio: float
     ) -> set[int]:
@@ -1182,6 +1154,14 @@ class WSNSimulator:
 
         return connected
 
+    def _ecmhr_connected_ids_for_threshold(
+        self,
+        threshold_ratio: float
+    ) -> set[int]:
+        return self._energy_constrained_connected_ids_for_threshold(
+            threshold_ratio
+        )
+
     def get_connected_alive_sensor_ids(
         self
     ) -> set[int]:
@@ -1196,26 +1176,10 @@ class WSNSimulator:
                 self._minimum_hop_connected_ids()
             )
 
-        normal_connected = (
-            self._ecmhr_connected_ids_for_threshold(
+        return (
+            self._energy_constrained_connected_ids_for_threshold(
                 self.energy_threshold_ratio
             )
-        )
-
-        if not self.allow_emergency_mode:
-
-            return normal_connected
-
-        emergency_connected = (
-            self._ecmhr_connected_ids_for_threshold(
-                self.emergency_threshold_ratio
-            )
-        )
-
-        return (
-            normal_connected
-            |
-            emergency_connected
         )
 
     def get_connectivity_metrics(
@@ -1534,6 +1498,71 @@ class WSNSimulator:
             )
         )
 
+        load_metrics = {
+            "overloaded_relay_count": 0,
+            "active_relay_count": 0,
+            "mean_relay_load": 0.0,
+            "max_relay_load": 0,
+            "relay_load_cv": 0.0
+        }
+
+        if (
+            self.routing_algorithm == "lb_ecmhr"
+            and hasattr(self.route_manager, "load_tracker")
+        ):
+            load_metrics = (
+                self.route_manager
+                .load_tracker
+                .get_metrics()
+            )
+
+        route_results = [
+            route
+            for route
+            in self.route_manager
+            .route_table.values()
+            if route is not None
+        ]
+
+        detour_route_count = sum(
+            1
+            for route
+            in route_results
+            if getattr(
+                route,
+                "detour_hops",
+                0
+            ) > 0
+        )
+
+        overload_fallback_route_count = sum(
+            1
+            for route
+            in route_results
+            if getattr(
+                route,
+                "used_overload_fallback",
+                False
+            )
+        )
+
+        if route_results:
+            average_max_relay_load = (
+                sum(
+                    getattr(
+                        route,
+                        "max_relay_load",
+                        0.0
+                    )
+                    for route
+                    in route_results
+                )
+                /
+                len(route_results)
+            )
+        else:
+            average_max_relay_load = 0.0
+
         return {
             "round":
                 self.current_round,
@@ -1705,7 +1734,41 @@ class WSNSimulator:
                 self._snapshot_value(
                     "LND",
                     "delivered_packets"
-                )
+                ),
+
+            "overloaded_relay_count":
+                load_metrics[
+                    "overloaded_relay_count"
+                ],
+
+            "active_relay_count":
+                load_metrics[
+                    "active_relay_count"
+                ],
+
+            "mean_relay_load":
+                load_metrics[
+                    "mean_relay_load"
+                ],
+
+            "max_relay_load":
+                load_metrics[
+                    "max_relay_load"
+                ],
+
+            "relay_load_cv":
+                load_metrics[
+                    "relay_load_cv"
+                ],
+
+            "detour_route_count":
+                detour_route_count,
+
+            "overload_fallback_route_count":
+                overload_fallback_route_count,
+
+            "average_route_max_relay_load":
+                average_max_relay_load
         }
 
     def print_summary(self) -> None:

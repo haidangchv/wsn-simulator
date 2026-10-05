@@ -70,7 +70,7 @@ def compare_algorithms(
 
     for algorithm in [
         "minimum_hop",
-        "ecmhr"
+        "lb_ecmhr"
     ]:
 
         metrics = (

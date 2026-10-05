@@ -1,13 +1,14 @@
-from routing.ecmhr import (
-    find_ecmhr_route
+from routing.lb_ecmhr import (
+    LBECMHRRouter,
+    LBECMHRRouteResult
 )
-
+from routing.load_tracker import (
+    RelayLoadTracker
+)
 from routing.minimum_hop import (
     find_minimum_hop_route
 )
-
 from routing.route_table import (
-    build_ecmhr_route_table,
     build_minimum_hop_route_table
 )
 
@@ -18,28 +19,11 @@ class RouteManager:
         self,
         network,
         config,
-        algorithm="minimum_hop"
+        algorithm="lb_ecmhr"
     ):
 
         self.network = network
         self.config = config
-
-        self.algorithm = algorithm
-
-        self.route_table = {}
-
-        self.route_requests = 0
-
-        self.route_table_hits = 0
-
-        self.route_table_builds = 0
-
-        self.on_demand_reroutes = 0
-
-        self.sensor_map = {
-            sensor.node_id: sensor
-            for sensor in network.sensors
-        }
 
         routing_config = (
             config.get(
@@ -48,23 +32,85 @@ class RouteManager:
             )
         )
 
-        self.energy_threshold_ratio = (
-            config["sensor"][
-                "energy_threshold_ratio"
-            ]
-        )
-
-        self.allow_emergency_mode = (
+        lb_config = (
             routing_config.get(
-                "allow_emergency_mode",
-                False
+                "lb_ecmhr",
+                {}
             )
         )
 
-        self.emergency_threshold_ratio = (
+        self.algorithm = (
+            algorithm
+            or routing_config.get(
+                "algorithm",
+                "lb_ecmhr"
+            )
+        )
+
+        self.routing_algorithm = self.algorithm
+
+        self.energy_threshold_ratio = float(
             routing_config.get(
-                "emergency_threshold_ratio",
-                0.10
+                "energy_threshold_ratio",
+                config.get(
+                    "sensor",
+                    {}
+                ).get(
+                    "energy_threshold_ratio",
+                    0.20
+                )
+            )
+        )
+
+        self.route_table = {}
+
+        self.route_requests = 0
+        self.route_table_hits = 0
+        self.route_table_builds = 0
+        self.on_demand_reroutes = 0
+
+        self.sensor_map = {
+            sensor.node_id: sensor
+            for sensor in network.sensors
+        }
+
+        self.load_tracker = RelayLoadTracker(
+            window_rounds=int(
+                lb_config.get(
+                    "load_window_rounds",
+                    20
+                )
+            ),
+            overload_factor=float(
+                lb_config.get(
+                    "overload_factor",
+                    2.0
+                )
+            ),
+            recovery_factor=float(
+                lb_config.get(
+                    "recovery_factor",
+                    1.2
+                )
+            )
+        )
+
+        self.lb_ecmhr_router = LBECMHRRouter(
+            network=network,
+            energy_threshold_ratio=(
+                self.energy_threshold_ratio
+            ),
+            max_extra_hops=int(
+                lb_config.get(
+                    "max_extra_hops",
+                    1
+                )
+            ),
+            allow_overload_fallback=bool(
+                lb_config.get(
+                    "allow_overload_fallback",
+                    True
+                )
             )
         )
 
@@ -75,7 +121,7 @@ class RouteManager:
 
         if algorithm not in {
             "minimum_hop",
-            "ecmhr"
+            "lb_ecmhr"
         }:
 
             raise ValueError(
@@ -84,6 +130,7 @@ class RouteManager:
             )
 
         self.algorithm = algorithm
+        self.routing_algorithm = algorithm
 
         self.clear()
 
@@ -110,11 +157,11 @@ class RouteManager:
 
         return graph
 
-    def prepare_round(self):
-        """
-        Build all routes using the current
-        energy/network snapshot.
-        """
+    def _build_minimum_hop_table(self):
+
+        graph = (
+            self._active_minimum_hop_graph()
+        )
 
         sensor_ids = [
             sensor.node_id
@@ -122,67 +169,65 @@ class RouteManager:
             in self.network.sensors
         ]
 
+        self.route_table = (
+            build_minimum_hop_route_table(
+                graph=graph,
+                sensor_ids=sensor_ids,
+                sink_id=(
+                    self.network
+                    .sink
+                    .node_id
+                )
+            )
+        )
+
+        self.route_table_builds += 1
+
+    def prepare_round(self):
+        """
+        Build all routes using the current
+        energy/load snapshot.
+        """
+
         if (
             self.algorithm
             == "minimum_hop"
         ):
 
-            graph = (
-                self._active_minimum_hop_graph()
-            )
+            self._build_minimum_hop_table()
+            return
 
-            self.route_table = (
-                build_minimum_hop_route_table(
-                    graph=graph,
-
-                    sensor_ids=(
-                        sensor_ids
-                    ),
-
-                    sink_id=(
-                        self.network
-                        .sink
-                        .node_id
-                    )
-                )
-            )
-
-        elif (
+        if (
             self.algorithm
-            == "ecmhr"
+            == "lb_ecmhr"
         ):
 
+            # Load reflects preceding rounds
+            self.load_tracker.update(
+                self.network.sensors
+            )
+
             self.route_table = (
-                build_ecmhr_route_table(
-                    graph=(
-                        self.network.graph
+                self.lb_ecmhr_router
+                .build_route_table(
+                    load_factors=(
+                        self.load_tracker
+                        .load_factors
                     ),
-
-                    sensor_map=(
-                        self.sensor_map
-                    ),
-
-                    sink_id=(
-                        self.network
-                        .sink
-                        .node_id
-                    ),
-
-                    energy_threshold_ratio=(
-                        self.energy_threshold_ratio
-                    ),
-
-                    allow_emergency_mode=(
-                        self.allow_emergency_mode
-                    ),
-
-                    emergency_threshold_ratio=(
-                        self.emergency_threshold_ratio
+                    overloaded_nodes=(
+                        self.load_tracker
+                        .overloaded_nodes
                     )
                 )
             )
 
-        self.route_table_builds += 1
+            self.route_table_builds += 1
+            return
+
+        raise ValueError(
+            f"Unknown routing algorithm: "
+            f"{self.algorithm}"
+        )
 
     def _route_is_valid(
         self,
@@ -192,27 +237,24 @@ class RouteManager:
         if route is None:
             return False
 
-        if not route.path:
+        if not getattr(route, "path", None):
             return False
 
-        source_id = (
-            route.path[0]
-        )
+        if len(route.path) < 2:
+            return False
+
+        source_id = route.path[0]
 
         if source_id not in self.sensor_map:
             return False
 
-        source = self.sensor_map[
-            source_id
-        ]
+        source = self.sensor_map[source_id]
 
         if not source.is_alive():
             return False
 
-        # Intermediate nodes only.
-        relay_ids = (
-            route.path[1:-1]
-        )
+        # Intermediate nodes (relays) only
+        relay_ids = route.path[1:-1]
 
         for relay_id in relay_ids:
 
@@ -228,23 +270,17 @@ class RouteManager:
 
             if (
                 self.algorithm
-                == "ecmhr"
+                == "lb_ecmhr"
             ):
-
-                threshold = getattr(
-                    route,
-                    "threshold_ratio_used",
-                    self.energy_threshold_ratio
-                )
 
                 if (
                     relay.energy_ratio()
-                    <= threshold
+                    <= self.energy_threshold_ratio
                 ):
 
                     return False
 
-        # Physical links must still exist.
+        # Physical links must still exist
         for index in range(
             len(route.path) - 1
         ):
@@ -259,6 +295,13 @@ class RouteManager:
                 return False
 
         return True
+
+    def is_route_valid(
+        self,
+        route
+    ) -> bool:
+
+        return self._route_is_valid(route)
 
     def _reroute(
         self,
@@ -278,9 +321,7 @@ class RouteManager:
 
             return find_minimum_hop_route(
                 graph=graph,
-
                 source_id=source_id,
-
                 sink_id=(
                     self.network
                     .sink
@@ -288,30 +329,18 @@ class RouteManager:
                 )
             )
 
-        return find_ecmhr_route(
-            graph=self.network.graph,
-
-            sensor_map=self.sensor_map,
-
-            source_id=source_id,
-
-            sink_id=(
-                self.network
-                .sink
-                .node_id
-            ),
-
-            energy_threshold_ratio=(
-                self.energy_threshold_ratio
-            ),
-
-            allow_emergency_mode=(
-                self.allow_emergency_mode
-            ),
-
-            emergency_threshold_ratio=(
-                self.emergency_threshold_ratio
+        self.route_table = (
+            self.lb_ecmhr_router.build_route_table(
+                load_factors=(
+                    self.load_tracker.load_factors
+                ),
+                overloaded_nodes=(
+                    self.load_tracker.overloaded_nodes
+                )
             )
+        )
+        return self.route_table.get(
+            source_id
         )
 
     def get_route(
@@ -321,19 +350,13 @@ class RouteManager:
 
         self.route_requests += 1
 
-        route = (
-            self.route_table.get(
-                source_id
-            )
-        )
-
-        if self._route_is_valid(
-            route
-        ):
-
-            self.route_table_hits += 1
-
-            return route
+        if source_id in self.route_table:
+            route = self.route_table[source_id]
+            if route is None:
+                return None
+            if self._route_is_valid(route):
+                self.route_table_hits += 1
+                return route
 
         route = self._reroute(
             source_id
