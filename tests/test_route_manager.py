@@ -239,6 +239,44 @@ class RouteManagerMidRoundRerouteTest(
             1
         )
 
+    def test_smart_rebuild_interval_and_event_triggers(self):
+        """
+        Verify that route table is reused across rounds within interval,
+        rebuilt when interval elapses, or rebuilt early if state changes.
+        """
+        # Initial build at round 1
+        self.route_manager.prepare_round(current_round=1)
+        self.assertEqual(self.route_manager.route_table_builds, 1)
+
+        # Round 2: no state change, interval not elapsed -> reuse table
+        self.route_manager.prepare_round(current_round=2)
+        self.assertEqual(self.route_manager.route_table_builds, 1)
+
+        # Round 3: no state change -> reuse table
+        self.route_manager.prepare_round(current_round=3)
+        self.assertEqual(self.route_manager.route_table_builds, 1)
+
+        # Round 7: interval (6 rounds) elapsed -> rebuilds!
+        self.route_manager.prepare_round(current_round=7)
+        self.assertEqual(self.route_manager.route_table_builds, 2)
+
+        # Round 8: within interval -> reuse
+        self.route_manager.prepare_round(current_round=8)
+        self.assertEqual(self.route_manager.route_table_builds, 2)
+
+        # Round 9: relay 2 becomes LOW_ENERGY -> triggers immediate rebuild
+        self.s2.remaining_energy = 0.35
+        self.s2.update_state(energy_threshold_ratio=0.20)
+        self.route_manager.prepare_round(current_round=9)
+        self.assertEqual(self.route_manager.route_table_builds, 3)
+
+        # Round 10: relay 3 dies -> triggers immediate rebuild
+        self.s3.remaining_energy = 0.0
+        self.s3.update_state(energy_threshold_ratio=0.20)
+        self.route_manager.prepare_round(current_round=10)
+        self.assertEqual(self.route_manager.route_table_builds, 4)
+
 
 if __name__ == "__main__":
     unittest.main()
+

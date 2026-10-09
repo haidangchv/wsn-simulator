@@ -5,6 +5,22 @@ from environment.interpolation import (
     create_idw_grid
 )
 
+HEATMAP_RANGES = {
+    "temperature": (18, 42),
+    "humidity": (20, 100),
+    "pm25": (0, 150),
+    "wind": (0, 10),
+    "water_quality": (20, 100)
+}
+
+HEATMAP_COLORSCALES = {
+    "temperature": "RdYlBu_r",
+    "humidity": "Blues",
+    "pm25": "RdYlGn_r",
+    "wind": "Viridis",
+    "water_quality": "RdYlGn"
+}
+
 def create_elqi_zone_map(
     zone_dataframe,
     config: dict,
@@ -782,6 +798,16 @@ def create_indicator_heatmap(
         ].iloc[0]
     )
 
+    zmin, zmax = HEATMAP_RANGES.get(
+        sensor_type,
+        (None, None)
+    )
+
+    colorscale = HEATMAP_COLORSCALES.get(
+        sensor_type,
+        "Viridis"
+    )
+
     fig = go.Figure()
 
     fig.add_trace(
@@ -790,7 +816,10 @@ def create_indicator_heatmap(
             y=grid_y,
             z=grid_z,
 
-            colorscale="Viridis",
+            zmin=zmin,
+            zmax=zmax,
+
+            colorscale=colorscale,
 
             colorbar=dict(
                 title=unit

@@ -202,9 +202,44 @@ class EnvironmentalDataTest(
 
         temp_hotspot_val = generator.generate(temp_hotspot, 1, 10).value
         temp_away_val = generator.generate(temp_away, 1, 10).value
-
         # Hotspot area should be warmer than away area
         self.assertGreater(temp_hotspot_val, temp_away_val + 2.0)
+
+    def test_day_night_temperature_cycle(
+        self
+    ):
+        generator = EnvironmentalDataGenerator(
+            self.config
+        )
+        sensor = self.create_sensor("temperature")
+
+        # Round 14 corresponds to 13:00-14:00 (peak daytime)
+        # Round 4 corresponds to 03:00-04:00 (night)
+        val_day = generator.generate(sensor, 14, 14 * 3600).value
+        generator.node_state.clear()
+        val_night = generator.generate(sensor, 4, 4 * 3600).value
+
+        self.assertGreater(val_day, val_night + 4.0)
+
+    def test_pollution_strength_scaling(
+        self
+    ):
+        cfg_normal = dict(self.config)
+        cfg_normal["environment"] = dict(self.config["environment"])
+        cfg_normal["environment"]["pollution_strength"] = 1.0
+
+        cfg_high = dict(self.config)
+        cfg_high["environment"] = dict(self.config["environment"])
+        cfg_high["environment"]["pollution_strength"] = 1.5
+
+        gen_normal = EnvironmentalDataGenerator(cfg_normal)
+        gen_high = EnvironmentalDataGenerator(cfg_high)
+
+        pm_hotspot = SensorNode(10, 1560, 1360, "pm25", 2.0, 2.0, 200)
+        val_normal = gen_normal.generate(pm_hotspot, 1, 10).value
+        val_high = gen_high.generate(pm_hotspot, 1, 10).value
+
+        self.assertGreater(val_high, val_normal + 10.0)
 
 
 if __name__ == "__main__":

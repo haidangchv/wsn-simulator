@@ -21,6 +21,9 @@ from streamlit_components.network_chart import (
 from experiments.compare_routing import (
     compare_algorithms
 )
+from visualization.routing import (
+    create_comparison_figures
+)
 
 from environment.analyzer import (
     EnvironmentalAnalyzer
@@ -39,6 +42,22 @@ from visualization.environment import (
     create_degradation_map,
     create_elqi_zone_map,
     create_indicator_heatmap
+)
+
+from simulation.simulation_clock import (
+    duration_to_rounds,
+    round_to_days
+)
+from environment.temporal_analysis import (
+    daily_statistics,
+    hourly_statistics,
+    monthly_statistics,
+    weekly_statistics
+)
+from simulation.checkpoint import (
+    CheckpointError,
+    create_checkpoint_bytes,
+    restore_checkpoint_bytes,
 )
 
 
@@ -199,6 +218,19 @@ st.caption(
     "Energy Model | Packet Simulation"
 )
 
+if "restored_checkpoint_metadata" in st.session_state:
+    _meta = st.session_state.restored_checkpoint_metadata
+    _sim = st.session_state.simulator
+    _alive_count = len([s for s in st.session_state.network.sensors if s.is_alive()])
+    _rpd = getattr(_sim, "rounds_per_day", 24)
+    st.info(
+        f"♻️ **Mô Phỏng Đã Khôi Phục Từ Checkpoint** | "
+        f"Round: **{_meta.get('round', 0):,}** ({round_to_days(_meta.get('round', 0), _rpd):.1f} days) | "
+        f"Thời điểm lưu: **{_meta.get('created_at', 'N/A')}** | "
+        f"Thuật toán: **{getattr(_sim, 'routing_algorithm', 'N/A').upper()}** | "
+        f"Node sống: **{_alive_count}/{len(st.session_state.network.sensors)}**"
+    )
+
 
 # =========================================
 # SIDEBAR
@@ -245,7 +277,7 @@ initial_energy = (
     st.sidebar.number_input(
         "Initial Energy (J)",
         min_value=0.1,
-        max_value=20.0,
+        max_value=100.0,
         value=float(
             current_config[
                 "sensor"
@@ -253,7 +285,7 @@ initial_energy = (
                 "initial_energy_j"
             ]
         ),
-        step=0.1
+        step=1.0
     )
 )
 
@@ -297,6 +329,40 @@ show_edges = (
         "Show Neighbor Links",
         value=False
     )
+)
+
+st.sidebar.divider()
+
+st.sidebar.subheader(
+    "⏱ Simulation Time"
+)
+
+sidebar_duration_unit = st.sidebar.selectbox(
+    "Đơn vị mô phỏng",
+    ["Rounds", "Days", "Weeks", "Months"],
+    index=0
+)
+
+sidebar_duration_val = st.sidebar.number_input(
+    "Thời lượng",
+    min_value=1,
+    max_value=10000 if sidebar_duration_unit == "Rounds" else 365,
+    value=100 if sidebar_duration_unit == "Rounds" else 7,
+    step=10 if sidebar_duration_unit == "Rounds" else 1
+)
+
+sidebar_rounds = duration_to_rounds(
+    value=sidebar_duration_val,
+    unit=sidebar_duration_unit,
+    rounds_per_day=getattr(
+        st.session_state.simulator,
+        "rounds_per_day",
+        24
+    )
+)
+
+st.sidebar.caption(
+    f"{sidebar_duration_val} {sidebar_duration_unit} = {sidebar_rounds:,} rounds (1 round = 1 giờ)"
 )
 
 st.sidebar.divider()
@@ -424,6 +490,88 @@ if selected_routing == "lb_ecmhr":
 
 
 # -----------------------------------------
+# ENVIRONMENTAL SCENARIO
+# -----------------------------------------
+
+st.sidebar.divider()
+
+st.sidebar.subheader(
+    "🌍 Environmental Scenario"
+)
+
+spatial_diversity = st.sidebar.slider(
+    "Spatial Diversity",
+    min_value=0.2,
+    max_value=2.0,
+    value=float(
+        current_config.get(
+            "environment",
+            {}
+        ).get(
+            "spatial_strength",
+            1.0
+        )
+    ),
+    step=0.1,
+    help="Độ phân hóa không gian toàn bản đồ (spatial_strength)"
+)
+
+pollution_intensity = st.sidebar.slider(
+    "Pollution Intensity",
+    min_value=0.2,
+    max_value=2.5,
+    value=float(
+        current_config.get(
+            "environment",
+            {}
+        ).get(
+            "pollution_strength",
+            1.0
+        )
+    ),
+    step=0.1,
+    help="Mức độ ô nhiễm công nghiệp / giao thông (pollution_strength)"
+)
+
+
+# -----------------------------------------
+# SIMULATION PERFORMANCE MODE
+# -----------------------------------------
+
+st.sidebar.divider()
+st.sidebar.subheader("⚡ Chế độ Mô phỏng")
+
+sim_mode_choice = st.sidebar.radio(
+    "Hiệu năng mô phỏng",
+    options=["🚀 Fast (Khuyên dùng khi chạy dài)", "🔍 Detailed (Phân tích chi tiết)"],
+    index=0 if current_config.get("routing", {}).get("lb_ecmhr", {}).get("route_update_interval_rounds", 6) >= 6 else 1,
+    help="Fast Mode: route update mỗi 6h, phân tích môi trường mỗi 24h, UI cập nhật batch 24 rounds.\nDetailed Mode: route update mỗi 1h, phân tích môi trường mỗi 6h, UI cập nhật batch 6 rounds."
+)
+
+if sim_mode_choice.startswith("🚀 Fast"):
+    mode_route_interval = 6
+    mode_env_interval = 24
+    mode_ui_batch = 24
+else:
+    mode_route_interval = 1
+    mode_env_interval = 6
+    mode_ui_batch = 6
+
+# Dynamically synchronize settings
+if "routing" not in st.session_state.config:
+    st.session_state.config["routing"] = {}
+if "lb_ecmhr" not in st.session_state.config["routing"]:
+    st.session_state.config["routing"]["lb_ecmhr"] = {}
+st.session_state.config["routing"]["lb_ecmhr"]["route_update_interval_rounds"] = mode_route_interval
+if "environment" in st.session_state.config:
+    st.session_state.config["environment"]["analysis_interval_rounds"] = mode_env_interval
+
+if hasattr(st.session_state.simulator, "route_manager"):
+    st.session_state.simulator.route_manager.route_update_interval_rounds = mode_route_interval
+st.session_state.simulator.environment_analysis_interval = mode_env_interval
+
+
+# -----------------------------------------
 # APPLY CONFIGURATION
 # -----------------------------------------
 
@@ -482,6 +630,13 @@ if st.sidebar.button(
         lb_config["overload_factor"] = float(overload_factor)
         lb_config["recovery_factor"] = float(recovery_factor)
         lb_config["max_extra_hops"] = int(max_extra_hops)
+        lb_config["route_update_interval_rounds"] = mode_route_interval
+
+    if "environment" not in new_config:
+        new_config["environment"] = {}
+    new_config["environment"]["spatial_strength"] = float(spatial_diversity)
+    new_config["environment"]["pollution_strength"] = float(pollution_intensity)
+    new_config["environment"]["analysis_interval_rounds"] = mode_env_interval
 
     network, simulator = (
         create_simulation(
@@ -519,6 +674,8 @@ if st.sidebar.button(
     st.session_state.source_sensor_select = (
         1
     )
+
+    st.session_state.pop("restored_checkpoint_metadata", None)
 
     st.rerun()
 
@@ -565,7 +722,129 @@ if st.sidebar.button(
         1
     )
 
+    st.session_state.pop("restored_checkpoint_metadata", None)
+
     st.rerun()
+
+
+# -----------------------------------------
+# CHECKPOINT (SAVE / RESTORE)
+# -----------------------------------------
+
+st.sidebar.divider()
+st.sidebar.subheader("💾 Checkpoint (Save / Restore)")
+
+cur_sim = st.session_state.simulator
+cur_rpd = getattr(cur_sim, "rounds_per_day", 24)
+st.sidebar.caption(
+    f"Round hiện tại: **{cur_sim.current_round:,}** "
+    f"({round_to_days(cur_sim.current_round, cur_rpd):.1f} ngày)"
+)
+
+# Download Checkpoint
+checkpoint_bytes = create_checkpoint_bytes(
+    simulator=st.session_state.simulator,
+    config=st.session_state.config,
+    app_version="1.0"
+)
+
+checkpoint_filename = (
+    f"wsn_checkpoint_round_{cur_sim.current_round}.wsnchk.gz"
+)
+
+st.sidebar.download_button(
+    label="💾 Save Simulation",
+    data=checkpoint_bytes,
+    file_name=checkpoint_filename,
+    mime="application/gzip",
+    use_container_width=True,
+    help="Tải file checkpoint nén (.wsnchk.gz) chứa toàn bộ simulator (topology, năng lượng, tải relay, môi trường, RNG, lịch sử)."
+)
+
+# Restore Checkpoint
+uploaded_checkpoint = st.sidebar.file_uploader(
+    "Khôi phục Simulation",
+    type=["gz", "wsnchk"],
+    key="checkpoint_uploader",
+    help="Chọn file checkpoint (.wsnchk.gz) để tiếp tục chính xác từ trạng thái đã lưu."
+)
+
+if uploaded_checkpoint is not None:
+    if st.sidebar.button(
+        "♻️ Restore Checkpoint",
+        type="primary",
+        use_container_width=True
+    ):
+        try:
+            checkpoint = restore_checkpoint_bytes(
+                uploaded_checkpoint.getvalue()
+            )
+            restored_sim = checkpoint["simulator"]
+            restored_cfg = checkpoint["config"]
+
+            st.session_state.simulator = restored_sim
+            st.session_state.config = restored_cfg
+            st.session_state.network = restored_sim.network
+            st.session_state.edge_geometry = build_edge_geometry(
+                restored_sim.network
+            )
+
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.session_state.last_processed_map_click = None
+            st.session_state.source_sensor_select = 1
+
+            st.session_state.restored_checkpoint_metadata = {
+                "created_at": checkpoint.get("created_at", "N/A"),
+                "round": checkpoint.get("round", restored_sim.current_round),
+                "app_version": checkpoint.get("app_version", "1.0"),
+            }
+
+            st.sidebar.success(
+                f"Khôi phục thành công round {restored_sim.current_round}!"
+            )
+            st.rerun()
+
+        except CheckpointError as exc:
+            st.sidebar.error(str(exc))
+        except Exception:
+            st.sidebar.error("Checkpoint không tương thích với phiên bản hiện tại.")
+
+# Auto Checkpoint Settings
+with st.sidebar.expander("⚙️ Auto Checkpoint", expanded=False):
+    auto_save_val = st.checkbox(
+        "Bật Auto Checkpoint",
+        value=bool(
+            st.session_state.config.get("checkpoint", {}).get("auto_save", False)
+        ),
+        help="Tự động lưu checkpoint định kỳ vào thư mục checkpoints/"
+    )
+    auto_save_interval = st.number_input(
+        "Chu kỳ lưu (rounds)",
+        min_value=50,
+        max_value=5000,
+        value=int(
+            st.session_state.config.get("checkpoint", {}).get("interval_rounds", 500)
+        ),
+        step=50
+    )
+    auto_save_keep = st.number_input(
+        "Giữ lại checkpoint gần nhất",
+        min_value=1,
+        max_value=20,
+        value=int(
+            st.session_state.config.get("checkpoint", {}).get("keep_last", 3)
+        ),
+        step=1
+    )
+
+    if "checkpoint" not in st.session_state.config:
+        st.session_state.config["checkpoint"] = {}
+    st.session_state.config["checkpoint"]["auto_save"] = auto_save_val
+    st.session_state.config["checkpoint"]["interval_rounds"] = int(auto_save_interval)
+    st.session_state.config["checkpoint"]["keep_last"] = int(auto_save_keep)
+    if hasattr(st.session_state.simulator, "config"):
+        st.session_state.simulator.config["checkpoint"] = st.session_state.config["checkpoint"]
 
 
 network = (
@@ -967,149 +1246,216 @@ st.subheader(
     "▶️ Simulation Control"
 )
 
+def run_simulation_batch(sim, num_rounds: int, label: str = ""):
+    if num_rounds <= 5:
+        sim.run(rounds=num_rounds)
+        return
 
-run1, run10, run50, run_custom = (
-    st.columns(4)
-)
+    progress_bar = st.progress(0.0)
+    status_text = st.empty()
 
-
-with run1:
-
-    if st.button(
-        "Run 1 Round",
-        use_container_width=True
-    ):
-
-        with st.spinner(
-            "Running 1 simulation round..."
-        ):
-
-            simulator.run(
-                rounds=1
-            )
-
-        st.session_state.selected_route = None
-        st.session_state.find_route_searched = False
-        st.rerun()
-
-
-with run10:
-
-    if st.button(
-        "Run 10 Rounds",
-        use_container_width=True
-    ):
-
-        with st.spinner(
-            "Running 10 simulation rounds..."
-        ):
-
-            simulator.run(
-                rounds=10
-            )
-
-        st.session_state.selected_route = None
-        st.session_state.find_route_searched = False
-        st.rerun()
-
-
-with run50:
-
-    if st.button(
-        "Run 50 Rounds",
-        use_container_width=True
-    ):
-
-        with st.spinner(
-            "Running 50 simulation rounds..."
-        ):
-
-            simulator.run(
-                rounds=50
-            )
-
-        st.session_state.selected_route = None
-        st.session_state.find_route_searched = False
-        st.rerun()
-
-
-with run_custom:
-
-    custom_rounds = (
-        st.number_input(
-            "Custom rounds",
-            min_value=1,
-            max_value=1000,
-            value=100,
-            step=10
+    def update_progress(current, total):
+        progress_bar.progress(min(current / total, 1.0))
+        status_text.caption(
+            f"⏳ {label or 'Đang mô phỏng'}: {current:,} / {total:,} rounds (Round hiện tại: {sim.current_round:,})"
         )
+
+    sim.run(
+        rounds=num_rounds,
+        progress_callback=update_progress,
+        batch_size=mode_ui_batch
     )
+    progress_bar.empty()
+    status_text.empty()
 
-    if st.button(
-        "Run Custom",
-        use_container_width=True
-    ):
 
-        with st.spinner(
-            f"Running {custom_rounds} rounds..."
+sim_col_rounds, sim_col_time = st.columns(2)
+
+with sim_col_rounds:
+
+    st.markdown("##### 🔢 Chạy theo số Round")
+
+    r1, r10, r50, r100 = st.columns(4)
+
+    with r1:
+        if st.button("1 Round", use_container_width=True, key="btn_run_1r"):
+            run_simulation_batch(simulator, 1, "1 Round")
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.rerun()
+
+    with r10:
+        if st.button("10 Rounds", use_container_width=True, key="btn_run_10r"):
+            run_simulation_batch(simulator, 10, "10 Rounds")
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.rerun()
+
+    with r50:
+        if st.button("50 Rounds", use_container_width=True, key="btn_run_50r"):
+            run_simulation_batch(simulator, 50, "50 Rounds")
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.rerun()
+
+    with r100:
+        if st.button("100 Rounds", use_container_width=True, key="btn_run_100r"):
+            run_simulation_batch(simulator, 100, "100 Rounds")
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.rerun()
+
+    r_input_col, r_btn_col = st.columns([1.5, 1.5])
+
+    with r_input_col:
+        custom_rounds = st.number_input(
+            "Số rounds tùy chọn",
+            min_value=1,
+            max_value=10000,
+            value=100,
+            step=10,
+            key="custom_rounds_number_input"
+        )
+
+    with r_btn_col:
+        st.write("")
+        st.write("")
+        if st.button(
+            f"▶ Chạy {custom_rounds} Rounds",
+            use_container_width=True,
+            key="btn_run_custom_rounds"
         ):
+            run_simulation_batch(simulator, int(custom_rounds), f"{custom_rounds} Rounds")
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.rerun()
 
-            simulator.run(
-                rounds=int(
-                    custom_rounds
-                )
-            )
+with sim_col_time:
 
-        st.session_state.selected_route = None
-        st.session_state.find_route_searched = False
-        st.rerun()
+    st.markdown("##### ⏱️ Chạy theo Thời gian (1 round = 1 giờ)")
+
+    t1, t7, t30 = st.columns(3)
+
+    with t1:
+        if st.button("📅 +1 Ngày (24r)", use_container_width=True, key="btn_run_1d"):
+            run_simulation_batch(simulator, 24, "1 Ngày (24 rounds)")
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.rerun()
+
+    with t7:
+        if st.button("📆 +7 Ngày (168r)", use_container_width=True, key="btn_run_7d"):
+            run_simulation_batch(simulator, 168, "7 Ngày (168 rounds)")
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.rerun()
+
+    with t30:
+        if st.button("🗓 +30 Ngày (720r)", use_container_width=True, key="btn_run_30d"):
+            run_simulation_batch(simulator, 720, "30 Ngày (720 rounds)")
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.rerun()
+
+    t_val_col, t_unit_col, t_btn_col = st.columns([1, 1, 1.5])
+
+    with t_val_col:
+        cust_val = st.number_input(
+            "Thời lượng",
+            min_value=1,
+            max_value=365,
+            value=7,
+            step=1,
+            key="custom_time_val_input"
+        )
+
+    with t_unit_col:
+        cust_unit = st.selectbox(
+            "Đơn vị",
+            ["Days", "Weeks", "Months"],
+            index=0,
+            key="custom_time_unit_select"
+        )
+
+    with t_btn_col:
+        rounds_calculated = duration_to_rounds(
+            value=cust_val,
+            unit=cust_unit,
+            rounds_per_day=simulator.rounds_per_day
+        )
+        st.write("")
+        st.write("")
+        if st.button(
+            f"🚀 Chạy ({rounds_calculated:,}r)",
+            use_container_width=True,
+            key="btn_run_custom_time"
+        ):
+            run_simulation_batch(simulator, rounds_calculated, f"{rounds_calculated:,} Rounds")
+            st.session_state.selected_route = None
+            st.session_state.find_route_searched = False
+            st.rerun()
 
 
 # =========================================
-# CURRENT METRICS
+# CURRENT METRICS & CLOCK
 # =========================================
 
 metrics = (
     simulator.get_metrics()
 )
 
-st.subheader(
-    "📊 Current Metrics"
+current_dt = (
+    simulator.clock.datetime_for_round(
+        max(simulator.current_round, 1)
+    )
+)
+elapsed_days = (
+    simulator.clock.elapsed_days(
+        simulator.current_round
+    )
 )
 
-elapsed_seconds = (
-    metrics["elapsed_seconds"]
+st.subheader(
+    "⏱ Simulation Clock"
 )
+
+tm1, tm2, tm3, tm4 = st.columns(4)
+tm1.metric("Current Round", f"{metrics['round']:,}")
+tm2.metric("Simulation Date", current_dt.strftime("%d/%m/%Y"))
+tm3.metric("Simulation Time", current_dt.strftime("%H:%M"))
+tm4.metric("Elapsed Time", f"{elapsed_days:.2f} days")
 
 st.caption(
-    f"Simulation time: "
-    f"{elapsed_seconds:.0f} seconds "
-    f"({elapsed_seconds / 60:.2f} minutes)"
+    f"Quy ước: 1 round = 1 giờ mô phỏng | 24 rounds/ngày | "
+    f"Tổng thời gian: {metrics['elapsed_seconds'] / 3600:.1f} giờ mô phỏng"
 )
 
+st.subheader(
+    "📊 Network Status"
+)
 
 m1, m2, m3, m4 = (
     st.columns(4)
 )
 
 m1.metric(
-    "Round",
-    metrics["round"]
-)
-
-m2.metric(
-    "Alive",
+    "Alive Nodes",
     metrics["alive_nodes"]
 )
 
-m3.metric(
+m2.metric(
     "Low Energy",
     metrics["low_energy_nodes"]
 )
 
-m4.metric(
-    "Dead",
+m3.metric(
+    "Dead Nodes",
     metrics["dead_nodes"]
+)
+
+m4.metric(
+    "PDR",
+    f"{metrics['pdr'] * 100:.2f}%"
 )
 
 
@@ -1118,22 +1464,28 @@ m5, m6, m7, m8 = (
 )
 
 m5.metric(
-    "PDR",
-    f"{metrics['pdr'] * 100:.2f}%"
+    "App Goodput",
+    (
+        f"{metrics['throughput_bps'] / 1000:.4f} kbps"
+        if metrics['throughput_bps'] < 1000
+        else f"{metrics['throughput_bps'] / 1000:.2f} kbps"
+    ),
+    help="Application Goodput = Delivered bits / Simulation time"
 )
 
 m6.metric(
-    "Throughput",
-    f"{metrics['throughput_bps'] / 1000:.2f} kbps"
+    "PHY Data Rate",
+    f"{metrics.get('link_data_rate_bps', 250000) / 1000:.0f} kbps",
+    help="Radio PHY channel speed = 250 kbps"
 )
 
 m7.metric(
-    "Avg Delay",
+    "Avg E2E Delay",
     f"{metrics['average_delay_ms']:.2f} ms"
 )
 
 m8.metric(
-    "Avg Hop",
+    "Avg Hop Count",
     f"{metrics['average_hop_count']:.2f}"
 )
 
@@ -1175,10 +1527,15 @@ if (
     is not None
 ):
 
+    fnd_days = round_to_days(
+        metrics["fnd_round"],
+        simulator.rounds_per_day
+    )
+
     st.info(
-        f"First Node Death occurred "
-        f"at round "
-        f"{metrics['fnd_round']}."
+        f"🏁 First Node Death (FND) occurred at round "
+        f"{metrics['fnd_round']} "
+        f"({fnd_days:.1f} simulation days)."
     )
 
 st.subheader(
@@ -1814,30 +2171,51 @@ comparison_rounds = (
     st.number_input(
         "Comparison rounds",
         min_value=10,
-        max_value=500,
-        value=100,
-        step=10
+        max_value=5000,
+        value=500,
+        step=50
     )
 )
 
 if st.button(
-    "Compare Minimum-Hop vs LB-ECMHR"
+    "Compare Minimum-Hop vs LB-ECMHR",
+    type="primary"
 ):
 
     with st.spinner(
-        "Running routing comparison..."
+        f"Running routing comparison ({comparison_rounds} rounds)..."
     ):
 
-        comparison_df = (
+        comparison_df, history_data = (
             compare_algorithms(
                 config=(
                     st.session_state.config
                 ),
                 rounds=int(
                     comparison_rounds
-                )
+                ),
+                return_history=True
             )
         )
+
+        st.session_state["comparison_df"] = (
+            comparison_df
+        )
+        st.session_state["comparison_history"] = (
+            history_data
+        )
+
+if (
+    "comparison_df" in st.session_state
+    and "comparison_history" in st.session_state
+):
+
+    comparison_df = (
+        st.session_state["comparison_df"]
+    )
+    history_data = (
+        st.session_state["comparison_history"]
+    )
 
     display_columns = [
         "algorithm",
@@ -1863,6 +2241,97 @@ if st.button(
         ],
         use_container_width=True,
         hide_index=True
+    )
+
+    # -------------------------------------
+    # FND DISPLAY
+    # -------------------------------------
+    fnd_mh = (
+        history_data.get("minimum_hop", {})
+        .get("fnd_round")
+    )
+    fnd_lb = (
+        history_data.get("lb_ecmhr", {})
+        .get("fnd_round")
+    )
+
+    st.markdown("#### 🏁 Thời điểm First Node Dead (FND)")
+    fnd_c1, fnd_c2, fnd_c3 = st.columns([1, 1, 1.2])
+
+    with fnd_c1:
+        st.metric(
+            "🟠 FND - Minimum-Hop",
+            f"Round {fnd_mh}" if fnd_mh is not None else "Chưa có (100% còn sống)",
+            help="Vòng đầu tiên mà một node bất kỳ trong mạng cạn kiệt năng lượng (Minimum-Hop)"
+        )
+
+    with fnd_c2:
+        st.metric(
+            "🔵 FND - LB-ECMHR",
+            f"Round {fnd_lb}" if fnd_lb is not None else "Chưa có (100% còn sống)",
+            help="Vòng đầu tiên mà một node bất kỳ trong mạng cạn kiệt năng lượng (LB-ECMHR)"
+        )
+
+    with fnd_c3:
+        if fnd_mh is not None and fnd_lb is not None:
+            delta_fnd = fnd_lb - fnd_mh
+            pct = (delta_fnd / fnd_mh * 100) if fnd_mh > 0 else 0
+            st.metric(
+                "⏳ Hiệu quả cải thiện FND",
+                f"{delta_fnd:+d} rounds",
+                delta=f"{pct:+.1f}% so với Min-Hop"
+            )
+        elif fnd_mh is not None and fnd_lb is None:
+            st.metric(
+                "⏳ Hiệu quả cải thiện FND",
+                f"> +{int(comparison_rounds) - fnd_mh} rounds",
+                delta="LB-ECMHR chưa có node chết!"
+            )
+        else:
+            st.metric(
+                "⏳ Hiệu quả cải thiện FND",
+                "Chưa có node chết",
+                delta="Cả 2 duy trì 100% pin sống"
+            )
+
+    # -------------------------------------
+    # 4 CHARTS (2 ROWS × 2 COLUMNS)
+    # -------------------------------------
+    figures = create_comparison_figures(
+        history_data=history_data
+    )
+
+    st.markdown("#### 📊 Biểu đồ so sánh hiệu năng theo vòng (2×2)")
+
+    row1_col1, row1_col2 = st.columns(2)
+    with row1_col1:
+        st.plotly_chart(
+            figures["connectivity"],
+            use_container_width=True
+        )
+    with row1_col2:
+        st.plotly_chart(
+            figures["delivered_data"],
+            use_container_width=True
+        )
+
+    row2_col1, row2_col2 = st.columns(2)
+    with row2_col1:
+        st.plotly_chart(
+            figures["energy_per_kb"],
+            use_container_width=True
+        )
+    with row2_col2:
+        st.plotly_chart(
+            figures["alive_nodes"],
+            use_container_width=True
+        )
+
+    st.caption(
+        "💡 **Ghi chú đánh giá:** "
+        "🟠 **Minimum-Hop** (màu cam) | 🔵 **LB-ECMHR** (màu xanh). "
+        "Ở biểu đồ 1, 2 và 4: đường **cao hơn** là tốt hơn; "
+        "ở biểu đồ 3: đường **thấp hơn** là tốt hơn (chi phí năng lượng J/KB thấp hơn)."
     )
 
 
@@ -1988,6 +2457,20 @@ st.header(
     "🌿 Environmental Intelligence"
 )
 
+env_cfg = st.session_state.config.get("environment", {})
+s_val = env_cfg.get("spatial_strength", 1.0)
+p_val = env_cfg.get("pollution_strength", 1.0)
+with st.expander("🌍 Kịch Bản Môi Trường Hiện Tại (Environmental Scenario)", expanded=False):
+    c_sc1, c_sc2 = st.columns(2)
+    c_sc1.metric("Spatial Diversity (Phân hóa không gian)", f"{s_val:.1f}")
+    c_sc2.metric("Pollution Intensity (Cường độ ô nhiễm)", f"{p_val:.1f}")
+    st.caption(
+        "Mô hình không gian sử dụng các Gaussian latent fields: Khu công nghiệp (NE), "
+        "Giao thông trục chính, Đảo nhiệt đô thị, Vùng sinh thái ẩm/xanh, Vùng ô nhiễm nước, "
+        "kết hợp chu kỳ ngày-đêm (24h) và tương quan tự hồi quy thời gian AR(1) (ρ=0.72). "
+        "Để đổi kịch bản, chỉnh ở thanh bên và bấm '🔄 Generate Network' để đảm bảo tính nhất quán chuỗi thời gian."
+    )
+
 collector = (
     simulator.environment_collector
 )
@@ -2012,23 +2495,228 @@ else:
     )
 
     (
+        hourly_tab,
+        daily_tab,
+        weekly_tab,
+        monthly_tab,
         trend_tab,
         heatmap_tab,
         quality_tab,
         degradation_tab
     ) = st.tabs([
-        "📈 Trends",
+        "⏰ Hourly (24h)",
+        "📅 Daily",
+        "📆 Weekly",
+        "🗓 Monthly",
+        "📈 All Trends",
         "🌡 Heatmaps",
         "🗺 Living Quality",
         "📉 Degradation"
     ])
 
+    environmental_df = (
+        collector.received_dataframe()
+    )
+
+    with hourly_tab:
+
+        st.subheader(
+            "⏰ Chu kỳ 24 Giờ Gần Nhất (Day-Night Cycle)"
+        )
+
+        if not environmental_df.empty:
+
+            max_round = int(
+                environmental_df["round"].max()
+            )
+
+            start_24h_round = max(
+                1,
+                max_round - 23
+            )
+
+            recent_24h_df = environmental_df[
+                environmental_df["round"] >= start_24h_round
+            ].copy()
+
+            if not recent_24h_df.empty:
+
+                hourly_piv = (
+                    recent_24h_df.groupby(
+                        ["round", "sensor_type"]
+                    )["value"]
+                    .mean()
+                    .unstack()
+                )
+
+                st.caption(
+                    f"Hiển thị từ Round {start_24h_round} đến Round {max_round} "
+                    f"({len(recent_24h_df):,} bản ghi nhận được tại Sink)"
+                )
+
+                st.line_chart(hourly_piv)
+
+                st.markdown("##### Bảng thống kê theo giờ")
+
+                st.dataframe(
+                    hourly_statistics(recent_24h_df),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+        else:
+
+            st.info("Chưa có dữ liệu đo môi trường.")
+
+    with daily_tab:
+
+        st.subheader(
+            "📅 Thống Kê Theo Ngày (Daily Statistics)"
+        )
+
+        if not environmental_df.empty:
+
+            daily_df = daily_statistics(
+                environmental_df
+            )
+
+            if not daily_df.empty:
+
+                sensor_types_daily = sorted(
+                    daily_df["sensor_type"].unique()
+                )
+
+                sel_sensor_daily = st.selectbox(
+                    "Chọn loại cảm biến (Daily)",
+                    sensor_types_daily,
+                    key="daily_sensor_select"
+                )
+
+                f_daily = daily_df[
+                    daily_df["sensor_type"] == sel_sensor_daily
+                ].copy()
+
+                f_daily["Date"] = (
+                    f_daily["timestamp"]
+                    .dt.strftime("%d/%m/%Y")
+                )
+
+                chart_daily = (
+                    f_daily.set_index("Date")[
+                        ["mean", "min", "max"]
+                    ]
+                )
+
+                st.line_chart(chart_daily)
+
+                st.dataframe(
+                    f_daily,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            else:
+
+                st.info("Chưa đủ dữ liệu ngày để tổng hợp.")
+
+    with weekly_tab:
+
+        st.subheader(
+            "📆 Thống Kê Theo Tuần (Weekly Statistics - 168 Rounds/Tuần)"
+        )
+
+        if not environmental_df.empty:
+
+            weekly_df = weekly_statistics(
+                environmental_df
+            )
+
+            if not weekly_df.empty:
+
+                sensor_types_weekly = sorted(
+                    weekly_df["sensor_type"].unique()
+                )
+
+                sel_sensor_weekly = st.selectbox(
+                    "Chọn loại cảm biến (Weekly)",
+                    sensor_types_weekly,
+                    key="weekly_sensor_select"
+                )
+
+                f_weekly = weekly_df[
+                    weekly_df["sensor_type"] == sel_sensor_weekly
+                ].copy()
+
+                f_weekly["Week"] = (
+                    f_weekly["timestamp"]
+                    .dt.strftime("%Y-W%W")
+                )
+
+                chart_weekly = (
+                    f_weekly.set_index("Week")[
+                        ["mean", "min", "max"]
+                    ]
+                )
+
+                st.line_chart(chart_weekly)
+
+                st.dataframe(
+                    f_weekly,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            else:
+
+                st.info("Cần ít nhất 1 tuần (168 rounds) để tổng hợp tuần đầy đủ.")
+
+    with monthly_tab:
+
+        st.subheader(
+            "🗓 Thống Kê Theo Tháng Lịch Thực (Monthly Statistics)"
+        )
+
+        if not environmental_df.empty:
+
+            monthly_df = monthly_statistics(
+                environmental_df
+            )
+
+            if not monthly_df.empty:
+
+                sensor_types_monthly = sorted(
+                    monthly_df["sensor_type"].unique()
+                )
+
+                sel_sensor_monthly = st.selectbox(
+                    "Chọn loại cảm biến (Monthly)",
+                    sensor_types_monthly,
+                    key="monthly_sensor_select"
+                )
+
+                f_monthly = monthly_df[
+                    monthly_df["sensor_type"] == sel_sensor_monthly
+                ].copy()
+
+                chart_monthly = (
+                    f_monthly.set_index("month")[
+                        ["mean", "min", "max"]
+                    ]
+                )
+
+                st.line_chart(chart_monthly)
+
+                st.dataframe(
+                    f_monthly,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            else:
+
+                st.info("Chưa có dữ liệu tháng.")
 
     with trend_tab:
-
-        environmental_df = (
-            collector.received_dataframe()
-        )
 
         indicator = (
             st.selectbox(

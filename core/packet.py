@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Union
 
 
@@ -22,6 +23,8 @@ class Packet:
     measurement_unit: str | None = None
 
     simulation_time_seconds: float = 0.0
+
+    simulation_datetime: datetime | None = None
 
     raw_payload_size_bytes: int | None = None
 

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -14,3 +15,5 @@ class SensorMeasurement:
     value: float
 
     unit: str
+
+    timestamp: datetime | None = None

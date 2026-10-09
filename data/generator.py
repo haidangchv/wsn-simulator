@@ -1,5 +1,5 @@
+from datetime import datetime
 import math
-
 import numpy as np
 
 from data.models import SensorMeasurement
@@ -7,549 +7,952 @@ from data.models import SensorMeasurement
 
 class EnvironmentalDataGenerator:
     """
-    Generate spatially and temporally correlated
-    environmental sensor measurements.
+    Sinh dữ liệu môi trường có:
+
+    - spatial heterogeneity (Gaussian latent fields)
+    - polluted / degraded regions
+    - day-night cycle (24h)
+    - slow temporal variation (weekly & pollution episodes)
+    - temporal autocorrelation (AR(1) process)
+    - measurement noise
+
+    Quan trọng:
+    Generator KHÔNG thay đổi tọa độ sensor.
+    Nó chỉ sử dụng sensor.x và sensor.y để xác định trường không gian.
     """
 
-    UNIT_MAP = {
+    UNITS = {
         "temperature": "°C",
         "humidity": "%",
         "pm25": "µg/m³",
         "wind": "m/s",
-        "water_quality": "score"
+        "water_quality": "score",
     }
+
+    # Backward compatibility alias
+    UNIT_MAP = UNITS
 
     def __init__(
         self,
-        config: dict
+        config: dict,
+        seed: int | None = None
     ):
 
         self.config = config
 
-        self.environment_config = (
-            config["environment"]
+        env = config.get(
+            "environment",
+            {}
         )
 
-        self.width = float(
-            config["network"]["width_m"]
+        network = config.get(
+            "network",
+            {}
         )
 
-        self.height = float(
-            config["network"]["height_m"]
+        self.width_m = float(
+            network.get(
+                "width_m",
+                network.get(
+                    "area_width_m",
+                    2000
+                )
+            )
         )
 
-        self.period = int(
-            self.environment_config[
-                "temporal_period_rounds"
-            ]
+        self.height_m = float(
+            network.get(
+                "height_m",
+                network.get(
+                    "area_height_m",
+                    2000
+                )
+            )
         )
 
-        self.smoothing = float(
-            self.environment_config[
-                "temporal_smoothing"
-            ]
+        # Backward compatibility aliases
+        self.width = self.width_m
+        self.height = self.height_m
+
+        seed_offset = int(
+            env.get(
+                "seed_offset",
+                10000
+            )
         )
 
-        seed = int(
-            config["network"]["random_seed"]
-        )
+        if seed is None:
+            seed = int(
+                network.get(
+                    "random_seed",
+                    42
+                )
+            )
 
-        # Separate random stream from topology
-        # generation.
+        # RNG môi trường độc lập với RNG deployment.
         self.rng = np.random.default_rng(
-            seed + 10000
+            seed + seed_offset
         )
 
-        self.previous_values = {}
+        self.temporal_period = int(
+            env.get(
+                "temporal_period_rounds",
+                24
+            )
+        )
+
+        self.rho = float(
+            env.get(
+                "temporal_correlation",
+                env.get(
+                    "temporal_smoothing",
+                    0.72
+                )
+            )
+        )
+
+        self.spatial_strength = float(
+            env.get(
+                "spatial_strength",
+                1.0
+            )
+        )
+
+        self.pollution_strength = float(
+            env.get(
+                "pollution_strength",
+                1.0
+            )
+        )
+
+        self.noise = env.get(
+            "noise",
+            {}
+        )
+
+        self.bounds = env.get(
+            "bounds",
+            {}
+        )
+
+        # Trạng thái môi trường thực bên dưới
+        # trước khi cộng nhiễu cảm biến.
+        self.node_state = {}
+
+    # =====================================================
+    # Utilities
+    # =====================================================
 
     @staticmethod
-    def _gaussian_hotspot(
-        x: float,
-        y: float,
-        center_x: float,
-        center_y: float,
-        sigma: float
-    ) -> float:
+    def _gaussian(
+        x,
+        y,
+        cx,
+        cy,
+        sx,
+        sy
+    ):
 
-        distance_squared = (
-            (x - center_x) ** 2
-            +
-            (y - center_y) ** 2
+        dx = (
+            (x - cx)
+            /
+            max(sx, 1e-9)
+        )
+
+        dy = (
+            (y - cy)
+            /
+            max(sy, 1e-9)
         )
 
         return math.exp(
-            -distance_squared
-            /
-            (2 * sigma ** 2)
+            -0.5
+            *
+            (
+                dx * dx
+                +
+                dy * dy
+            )
         )
 
-    def _normalized_position(
+    @staticmethod
+    def _cyclic_hour_distance(
+        hour,
+        center
+    ):
+
+        difference = abs(
+            hour - center
+        )
+
+        return min(
+            difference,
+            24.0 - difference
+        )
+
+    @classmethod
+    def _hour_peak(
+        cls,
+        hour,
+        center,
+        width
+    ):
+
+        distance = (
+            cls._cyclic_hour_distance(
+                hour,
+                center
+            )
+        )
+
+        return math.exp(
+            -0.5
+            *
+            (
+                distance
+                /
+                width
+            ) ** 2
+        )
+
+    def _clamp(
+        self,
+        sensor_type,
+        value
+    ):
+
+        bounds = (
+            self.bounds.get(
+                sensor_type
+            )
+        )
+
+        if bounds is None:
+            return float(value)
+
+        if isinstance(bounds, (list, tuple)):
+            low, high = bounds[0], bounds[1]
+        elif isinstance(bounds, dict):
+            low = bounds.get("min", float("-inf"))
+            high = bounds.get("max", float("inf"))
+        else:
+            return float(value)
+
+        return float(
+            np.clip(
+                value,
+                low,
+                high
+            )
+        )
+
+    # =====================================================
+    # Spatial latent fields
+    # =====================================================
+
+    def _spatial_fields(
         self,
         sensor
-    ) -> tuple[float, float]:
+    ):
 
-        return (
-            sensor.x / self.width,
-            sensor.y / self.height
+        # Chuẩn hóa tọa độ về [0, 1].
+        x = (
+            sensor.x
+            /
+            self.width_m
         )
 
-    def _temporal_phase(
-        self,
-        round_number: int
-    ) -> float:
-
-        return (
-            2
-            * math.pi
-            * round_number
-            / self.period
+        y = (
+            sensor.y
+            /
+            self.height_m
         )
 
-    def _temperature_target(
-        self,
-        sensor,
-        round_number
-    ) -> float:
+        # ---------------------------------------------
+        # Khu công nghiệp / nguồn phát thải chính
+        # ---------------------------------------------
 
-        x, y = (
-            self._normalized_position(
-                sensor
-            )
-        )
-
-        phase = self._temporal_phase(
-            round_number
-        )
-
-        # General spatial gradient
-        spatial_gradient = (
-            2.5 * (x - 0.5)
-            +
-            1.2
-            * math.sin(
-                2 * math.pi * y
-            )
-        )
-
-        # Synthetic urban heat island.
-        heat_hotspot = (
-            4.0
-            * self._gaussian_hotspot(
-                x,
-                y,
-                0.72,
-                0.35,
-                0.16
-            )
-        )
-
-        temporal = (
-            2.5
-            * math.sin(
-                phase - math.pi / 2
-            )
-        )
-
-        return (
-            30.0
-            +
-            spatial_gradient
-            +
-            heat_hotspot
-            +
-            temporal
-        )
-
-    def _humidity_target(
-        self,
-        sensor,
-        round_number
-    ) -> float:
-
-        x, y = (
-            self._normalized_position(
-                sensor
-            )
-        )
-
-        phase = self._temporal_phase(
-            round_number
-        )
-
-        spatial = (
-            6.0 * (0.5 - x)
-            +
-            4.0
-            * math.sin(
-                math.pi * y
-            )
-        )
-
-        temporal = (
-            7.0
-            * math.sin(
-                phase + math.pi / 2
-            )
-        )
-
-        dry_hotspot = (
-            -12.0
-            * self._gaussian_hotspot(
-                x,
-                y,
-                0.72,
-                0.35,
-                0.18
-            )
-        )
-
-        return (
-            68.0
-            +
-            spatial
-            +
-            temporal
-            +
-            dry_hotspot
-        )
-
-    def _pm25_target(
-        self,
-        sensor,
-        round_number
-    ) -> float:
-
-        x, y = (
-            self._normalized_position(
-                sensor
-            )
-        )
-
-        phase = self._temporal_phase(
-            round_number
-        )
-
-        pollution_hotspot_1 = (
-            55.0
-            * self._gaussian_hotspot(
+        industrial = (
+            self._gaussian(
                 x,
                 y,
                 0.78,
                 0.68,
-                0.14
-            )
-        )
-
-        pollution_hotspot_2 = (
-            28.0
-            * self._gaussian_hotspot(
-                x,
-                y,
-                0.30,
-                0.42,
-                0.18
-            )
-        )
-
-        temporal = (
-            10.0
-            *
-            (
-                1
-                +
-                math.sin(
-                    phase
-                )
-            )
-            / 2
-        )
-
-        return (
-            18.0
-            +
-            pollution_hotspot_1
-            +
-            pollution_hotspot_2
-            +
-            temporal
-        )
-
-    def _wind_target(
-        self,
-        sensor,
-        round_number
-    ) -> float:
-
-        x, y = (
-            self._normalized_position(
-                sensor
-            )
-        )
-
-        phase = self._temporal_phase(
-            round_number
-        )
-
-        spatial = (
-            1.0
-            +
-            1.8 * y
-            -
-            0.8 * x
-        )
-
-        temporal = (
-            0.8
-            * math.sin(
-                phase + 0.7
-            )
-        )
-
-        sheltered_zone = (
-            -1.2
-            * self._gaussian_hotspot(
-                x,
-                y,
-                0.60,
-                0.50,
-                0.17
-            )
-        )
-
-        return (
-            2.0
-            +
-            spatial
-            +
-            temporal
-            +
-            sheltered_zone
-        )
-
-    def _water_quality_target(
-        self,
-        sensor,
-        round_number
-    ) -> float:
-
-        x, y = (
-            self._normalized_position(
-                sensor
-            )
-        )
-
-        phase = self._temporal_phase(
-            round_number
-        )
-
-        pollution_area = (
-            -40.0
-            * self._gaussian_hotspot(
-                x,
-                y,
-                0.25,
-                0.78,
+                0.15,
                 0.16
             )
         )
 
-        secondary_area = (
-            -18.0
-            * self._gaussian_hotspot(
+        # ---------------------------------------------
+        # Khu giao thông đông
+        # ---------------------------------------------
+
+        traffic = (
+            self._gaussian(
+                x,
+                y,
+                0.30,
+                0.42,
+                0.13,
+                0.17
+            )
+        )
+
+        # ---------------------------------------------
+        # Hiệu ứng đảo nhiệt đô thị
+        # ---------------------------------------------
+
+        urban = (
+            self._gaussian(
                 x,
                 y,
                 0.70,
-                0.65,
+                0.33,
+                0.20,
+                0.17
+            )
+        )
+
+        # ---------------------------------------------
+        # Vùng cây xanh / ẩm
+        # ---------------------------------------------
+
+        green = (
+            self._gaussian(
+                x,
+                y,
+                0.40,
+                0.75,
+                0.22,
+                0.18
+            )
+        )
+
+        # ---------------------------------------------
+        # Ô nhiễm chất lượng nước
+        # ---------------------------------------------
+
+        water_pollution_1 = (
+            self._gaussian(
+                x,
+                y,
+                0.80,
+                0.72,
+                0.18,
+                0.14
+            )
+        )
+
+        water_pollution_2 = (
+            self._gaussian(
+                x,
+                y,
+                0.20,
+                0.80,
+                0.15,
+                0.17
+            )
+        )
+
+        water_pollution = max(
+            water_pollution_1,
+            water_pollution_2
+        )
+
+        # ---------------------------------------------
+        # Vùng khuất gió
+        # ---------------------------------------------
+
+        sheltered = (
+            self._gaussian(
+                x,
+                y,
+                0.58,
+                0.48,
+                0.22,
                 0.20
             )
         )
 
-        temporal = (
-            3.0
-            * math.sin(
-                phase / 2
+        return {
+            "industrial":
+                industrial,
+
+            "traffic":
+                traffic,
+
+            "urban":
+                urban,
+
+            "green":
+                green,
+
+            "water_pollution":
+                water_pollution,
+
+            "sheltered":
+                sheltered,
+        }
+
+    # =====================================================
+    # Temporal latent fields
+    # =====================================================
+
+    def _temporal_fields(
+        self,
+        round_number
+    ):
+
+        # 1 round = 1 giờ.
+        hour = (
+            (round_number - 1)
+            % 24
+        )
+
+        elapsed_days = (
+            (round_number - 1)
+            /
+            24.0
+        )
+
+        # ---------------------------------------------
+        # Chu kỳ nhiệt độ:
+        # thấp ban đêm, cao khoảng 14h.
+        # ---------------------------------------------
+
+        temperature_cycle = math.sin(
+            2.0
+            *
+            math.pi
+            *
+            (
+                hour - 8.0
+            )
+            /
+            24.0
+        )
+
+        # ---------------------------------------------
+        # PM2.5 cao hơn vào giờ giao thông
+        # sáng / chiều.
+        # ---------------------------------------------
+
+        morning_rush = (
+            self._hour_peak(
+                hour,
+                center=8.0,
+                width=2.0
             )
         )
 
-        return (
-            86.0
-            +
-            pollution_area
-            +
-            secondary_area
-            +
-            temporal
+        evening_rush = (
+            self._hour_peak(
+                hour,
+                center=18.0,
+                width=2.5
+            )
         )
+
+        traffic_cycle = max(
+            morning_rush,
+            evening_rush
+        )
+
+        # ---------------------------------------------
+        # Gió thường mạnh hơn buổi trưa / chiều.
+        # ---------------------------------------------
+
+        wind_afternoon = (
+            self._hour_peak(
+                hour,
+                center=14.0,
+                width=4.0
+            )
+        )
+
+        # ---------------------------------------------
+        # Biến động chậm theo tuần
+        # ---------------------------------------------
+
+        weekly_cycle = math.sin(
+            2.0
+            *
+            math.pi
+            *
+            elapsed_days
+            /
+            7.0
+        )
+
+        # ---------------------------------------------
+        # Pollution episode:
+        # một số ngày trong tuần ô nhiễm tăng.
+        # Đây là synthetic scenario,
+        # không phải dữ liệu quan trắc thật.
+        # ---------------------------------------------
+
+        day_in_week = (
+            elapsed_days
+            %
+            7.0
+        )
+
+        pollution_episode = math.exp(
+            -0.5
+            *
+            (
+                (
+                    day_in_week
+                    -
+                    3.5
+                )
+                /
+                1.15
+            ) ** 2
+        )
+
+        return {
+            "hour":
+                hour,
+
+            "temperature_cycle":
+                temperature_cycle,
+
+            "traffic_cycle":
+                traffic_cycle,
+
+            "wind_afternoon":
+                wind_afternoon,
+
+            "weekly_cycle":
+                weekly_cycle,
+
+            "pollution_episode":
+                pollution_episode,
+        }
+
+    # =====================================================
+    # Environmental target
+    # =====================================================
 
     def _target_value(
         self,
         sensor,
         round_number
-    ) -> float:
+    ):
+
+        spatial = (
+            self._spatial_fields(
+                sensor
+            )
+        )
+
+        temporal = (
+            self._temporal_fields(
+                round_number
+            )
+        )
+
+        S = self.spatial_strength
+        P = self.pollution_strength
+
+        industrial = (
+            spatial["industrial"]
+        )
+
+        traffic = (
+            spatial["traffic"]
+        )
+
+        urban = (
+            spatial["urban"]
+        )
+
+        green = (
+            spatial["green"]
+        )
+
+        water_pollution = (
+            spatial["water_pollution"]
+        )
+
+        sheltered = (
+            spatial["sheltered"]
+        )
+
+        temp_cycle = (
+            temporal[
+                "temperature_cycle"
+            ]
+        )
+
+        traffic_cycle = (
+            temporal[
+                "traffic_cycle"
+            ]
+        )
+
+        wind_cycle = (
+            temporal[
+                "wind_afternoon"
+            ]
+        )
+
+        weekly = (
+            temporal[
+                "weekly_cycle"
+            ]
+        )
+
+        episode = (
+            temporal[
+                "pollution_episode"
+            ]
+        )
 
         sensor_type = (
             sensor.sensor_type
         )
 
+        # =============================================
+        # TEMPERATURE
+        # =============================================
+
         if sensor_type == "temperature":
 
-            return (
-                self._temperature_target(
-                    sensor,
-                    round_number
+            value = (
+                29.0
+                +
+                4.8
+                *
+                temp_cycle
+
+                +
+                S
+                *
+                (
+                    3.5
+                    *
+                    urban
+
+                    +
+                    1.8
+                    *
+                    industrial
+
+                    -
+                    2.0
+                    *
+                    green
                 )
+
+                +
+                0.8
+                *
+                weekly
             )
 
-        if sensor_type == "humidity":
+        # =============================================
+        # HUMIDITY
+        # =============================================
 
-            return (
-                self._humidity_target(
-                    sensor,
-                    round_number
+        elif sensor_type == "humidity":
+
+            value = (
+                70.0
+
+                -
+                10.0
+                *
+                temp_cycle
+
+                +
+                S
+                *
+                (
+                    12.0
+                    *
+                    green
+
+                    -
+                    8.0
+                    *
+                    urban
+
+                    -
+                    4.0
+                    *
+                    industrial
                 )
+
+                -
+                2.0
+                *
+                weekly
             )
 
-        if sensor_type == "pm25":
+        # =============================================
+        # PM2.5
+        # =============================================
 
-            return (
-                self._pm25_target(
-                    sensor,
-                    round_number
+        elif sensor_type == "pm25":
+
+            value = (
+                18.0
+
+                +
+                P
+                *
+                S
+                *
+                (
+                    58.0
+                    *
+                    industrial
+
+                    +
+                    38.0
+                    *
+                    traffic
+
+                    +
+                    20.0
+                    *
+                    traffic_cycle
+                    *
+                    (
+                        0.35
+                        +
+                        traffic
+                    )
+
+                    +
+                    28.0
+                    *
+                    episode
+                    *
+                    (
+                        0.25
+                        +
+                        industrial
+                    )
                 )
+
+                -
+                8.0
+                *
+                wind_cycle
             )
 
-        if sensor_type == "wind":
+        # =============================================
+        # WIND
+        # =============================================
 
-            return (
-                self._wind_target(
-                    sensor,
-                    round_number
+        elif sensor_type == "wind":
+
+            value = (
+                2.0
+
+                +
+                2.3
+                *
+                wind_cycle
+
+                +
+                S
+                *
+                (
+                    1.0
+                    *
+                    green
+
+                    -
+                    1.3
+                    *
+                    sheltered
+
+                    -
+                    0.7
+                    *
+                    urban
                 )
+
+                +
+                0.4
+                *
+                weekly
             )
 
-        if (
+        # =============================================
+        # WATER QUALITY
+        #
+        # Score càng cao càng tốt.
+        # =============================================
+
+        elif (
             sensor_type
-            == "water_quality"
+            ==
+            "water_quality"
         ):
 
-            return (
-                self._water_quality_target(
-                    sensor,
-                    round_number
+            value = (
+                88.0
+
+                -
+                P
+                *
+                S
+                *
+                (
+                    46.0
+                    *
+                    water_pollution
+
+                    +
+                    22.0
+                    *
+                    industrial
+
+                    +
+                    8.0
+                    *
+                    traffic
                 )
+
+                +
+                4.0
+                *
+                green
+
+                -
+                3.0
+                *
+                episode
+                *
+                water_pollution
             )
 
-        raise ValueError(
-            f"Unsupported sensor type: "
-            f"{sensor_type}"
-        )
+        else:
 
-    def _noise(
-        self,
-        sensor_type: str
-    ) -> float:
-
-        std = float(
-            self.environment_config[
-                "noise"
-            ][
-                sensor_type
-            ]
-        )
-
-        return float(
-            self.rng.normal(
-                0.0,
-                std
+            raise ValueError(
+                "Unknown sensor type: "
+                f"{sensor_type}"
             )
-        )
 
-    def _clamp(
-        self,
-        sensor_type: str,
-        value: float
-    ) -> float:
+        return float(value)
 
-        bounds = (
-            self.environment_config[
-                "bounds"
-            ][
-                sensor_type
-            ]
-        )
-
-        minimum = float(
-            bounds["min"]
-        )
-
-        maximum = float(
-            bounds["max"]
-        )
-
-        return max(
-            minimum,
-            min(
-                maximum,
-                value
-            )
-        )
+    # =====================================================
+    # Generate measurement
+    # =====================================================
 
     def generate(
         self,
         sensor,
         round_number: int,
-        simulation_time_seconds: float
+        simulation_time_seconds: float = 0.0,
+        timestamp: datetime | None = None
     ) -> SensorMeasurement:
 
-        target = self._target_value(
-            sensor,
-            round_number
+        sensor_type = (
+            sensor.sensor_type
         )
 
-        previous = (
-            self.previous_values.get(
-                sensor.node_id
+        target = (
+            self._target_value(
+                sensor,
+                round_number
             )
+        )
+
+        sigma = float(
+            self.noise.get(
+                sensor_type,
+                0.5
+            )
+        )
+
+        node_id = sensor.node_id
+
+        previous = (
+            self.node_state.get(
+                node_id
+            )
+        )
+
+        # Process noise:
+        # biến động thật của môi trường.
+        process_sigma = (
+            sigma
+            *
+            0.35
+        )
+
+        # Measurement noise:
+        # sai số phép đo của sensor.
+        measurement_sigma = (
+            sigma
+            *
+            0.65
         )
 
         if previous is None:
 
-            value = (
+            latent_state = (
                 target
                 +
-                self._noise(
-                    sensor.sensor_type
+                self.rng.normal(
+                    0.0,
+                    process_sigma
                 )
             )
 
         else:
 
-            value = (
-                self.smoothing
-                * previous
+            latent_state = (
+                self.rho
+                *
+                previous
+
                 +
                 (
                     1.0
                     -
-                    self.smoothing
+                    self.rho
                 )
-                * target
+                *
+                target
+
                 +
-                self._noise(
-                    sensor.sensor_type
+                self.rng.normal(
+                    0.0,
+                    process_sigma
                 )
             )
 
-        value = self._clamp(
-            sensor.sensor_type,
-            value
+        # Lưu trạng thái môi trường thật.
+        self.node_state[
+            node_id
+        ] = latent_state
+
+        # Sensor measurement.
+        measured_value = (
+            latent_state
+            +
+            self.rng.normal(
+                0.0,
+                measurement_sigma
+            )
         )
 
-        self.previous_values[
-            sensor.node_id
-        ] = value
+        measured_value = (
+            self._clamp(
+                sensor_type,
+                measured_value
+            )
+        )
 
         return SensorMeasurement(
+
             source_id=(
                 sensor.node_id
             ),
@@ -566,14 +969,17 @@ class EnvironmentalDataGenerator:
                 simulation_time_seconds
             ),
 
-            value=round(
-                value,
-                3
+            value=(
+                measured_value
             ),
 
             unit=(
-                self.UNIT_MAP[
-                    sensor.sensor_type
+                self.UNITS[
+                    sensor_type
                 ]
+            ),
+
+            timestamp=(
+                timestamp
             )
         )

@@ -27,34 +27,40 @@ radio:
 
 
 sensor:
-  initial_energy_j: 2.0
-  transmission_range_m: 200
-  energy_threshold_ratio: 0.20
+  initial_energy_j: 20.0
+  transmission_range_m: 250
+  energy_threshold_ratio: 0.15
 
 packet:
-  payload_size_bytes: 128
+  payload_size_bytes: 64
   sampling_interval_seconds: 10
 
 simulation:
   mode: "round_based"
-  max_rounds: 1000
+  max_rounds: 10000
+
+  time:
+    start_datetime: "2026-01-01 00:00:00"
+
+    # 1 round = 1 giờ mô phỏng
+    round_duration_minutes: 60
 
 routing:
   algorithm: "lb_ecmhr"
 
-  energy_threshold_ratio: 0.20
+  energy_threshold_ratio: 0.15
 
   lb_ecmhr:
     # Tải relay được tính trên bao nhiêu round gần nhất
-    load_window_rounds: 20
+    load_window_rounds: 10
 
-    # Relay có tải >= 2 lần mức trung bình
+    # Relay có tải >= 1.5 lần mức trung bình
     # được xem là overloaded
-    overload_factor: 2.0
+    overload_factor: 1.5
 
     # Relay overloaded chỉ được phục hồi khi
-    # tải giảm xuống <= 1.2 lần trung bình
-    recovery_factor: 1.2
+    # tải giảm xuống <= 1.1 lần trung bình
+    recovery_factor: 1.1
 
     # Cho phép đi vòng tối đa 1 hop
     # để tránh hotspot
@@ -63,6 +69,10 @@ routing:
     # Nếu không có đường tránh overload hợp lệ,
     # vẫn dùng relay overloaded để duy trì connectivity
     allow_overload_fallback: true
+
+    # Performance
+    route_update_interval_rounds: 6
+    candidate_routes_per_source: 6
 
 sensor_types:
   temperature: 100
@@ -74,38 +84,39 @@ sensor_types:
 environment:
   enabled: true
 
-  temporal_period_rounds: 144
-  temporal_smoothing: 0.85
+  # RNG riêng cho dữ liệu môi trường.
+  # Không ảnh hưởng vị trí sensor.
+  seed_offset: 10000
 
-  freshness_max_rounds: 5
+  # 1 round = 1 giờ
+  temporal_period_rounds: 24
+
+  # Tương quan theo thời gian.
+  # Giá trị hiện tại phụ thuộc khoảng 72% trạng thái trước.
+  temporal_correlation: 0.72
+
+  # Điều chỉnh mức phân hóa toàn bản đồ.
+  spatial_strength: 1.0
+
+  # Điều chỉnh mức độ ô nhiễm.
+  pollution_strength: 1.0
+
+  # Dữ liệu cũ hơn 6 giờ được xem là giảm độ tươi mới
+  freshness_max_rounds: 6
 
   noise:
-    temperature: 0.15
-    humidity: 0.40
-    pm25: 1.20
-    wind: 0.12
-    water_quality: 0.40
+    temperature: 0.30
+    humidity: 0.80
+    pm25: 2.5
+    wind: 0.25
+    water_quality: 1.0
 
   bounds:
-    temperature:
-      min: 18.0
-      max: 45.0
-
-    humidity:
-      min: 20.0
-      max: 100.0
-
-    pm25:
-      min: 0.0
-      max: 200.0
-
-    wind:
-      min: 0.0
-      max: 15.0
-
-    water_quality:
-      min: 0.0
-      max: 100.0
+    temperature: [18, 45]
+    humidity: [20, 100]
+    pm25: [0, 200]
+    wind: [0, 15]
+    water_quality: [0, 100]
 
   zones:
     zone_size_m: 200
@@ -187,10 +198,12 @@ environment:
         min_score: 0
         label: "Rất kém"
 
-  analysis_interval_rounds: 10
+  # Phân tích môi trường không gian định kỳ (24 round = 1 ngày)
+  analysis_interval_rounds: 24
 
   degradation:
-    lookback_rounds: 100
+    # So sánh khoảng một tuần trước (168 giờ = 7 ngày)
+    lookback_rounds: 168
 
     improvement_threshold: 3.0
     stable_tolerance: 3.0
@@ -203,4 +216,10 @@ environment:
   alerts:
     warning_elqi_below: 50
     critical_elqi_below: 35
-    significant_decline_below: -8
+    significant_decline_below: -8
+
+checkpoint:
+  auto_save: false
+  interval_rounds: 500
+  directory: "checkpoints"
+  keep_last: 3

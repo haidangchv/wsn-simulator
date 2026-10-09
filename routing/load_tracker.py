@@ -2,6 +2,21 @@ from collections import defaultdict, deque
 import math
 
 
+class HistoryDict(dict):
+    """
+    Dictionary that auto-initializes missing keys with a deque of given maxlen.
+    Fully pickle-serializable (unlike a defaultdict with a lambda).
+    """
+
+    def __init__(self, maxlen: int = 20):
+        super().__init__()
+        self.maxlen = maxlen
+
+    def __missing__(self, key):
+        self[key] = deque(maxlen=self.maxlen)
+        return self[key]
+
+
 class RelayLoadTracker:
     """
     Theo dõi số packet mà mỗi sensor đã forward
@@ -45,10 +60,8 @@ class RelayLoadTracker:
             recovery_factor
         )
 
-        self.histories = defaultdict(
-            lambda: deque(
-                maxlen=self.window_rounds
-            )
+        self.histories = HistoryDict(
+            maxlen=self.window_rounds
         )
 
         self.last_forwarded_total = {}

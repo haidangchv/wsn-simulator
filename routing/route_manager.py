@@ -95,6 +95,26 @@ class RouteManager:
             )
         )
 
+        self.route_update_interval_rounds = int(
+            lb_config.get(
+                "route_update_interval_rounds",
+                6
+            )
+        )
+
+        self.candidate_routes_per_source = int(
+            lb_config.get(
+                "candidate_routes_per_source",
+                6
+            )
+        )
+
+        self.last_build_round = -999
+        self.prev_overloaded_nodes = set()
+        self.prev_low_energy_nodes = set()
+        self.prev_dead_nodes = set()
+        self._round_counter = 0
+
         self.lb_ecmhr_router = LBECMHRRouter(
             network=network,
             energy_threshold_ratio=(
@@ -111,7 +131,8 @@ class RouteManager:
                     "allow_overload_fallback",
                     True
                 )
-            )
+            ),
+            candidate_k=self.candidate_routes_per_source
         )
 
     def set_algorithm(
@@ -137,6 +158,10 @@ class RouteManager:
     def clear(self):
 
         self.route_table = {}
+        self.last_build_round = -999
+        self.prev_overloaded_nodes = set()
+        self.prev_low_energy_nodes = set()
+        self.prev_dead_nodes = set()
 
     def _active_minimum_hop_graph(self):
 
@@ -183,45 +208,107 @@ class RouteManager:
 
         self.route_table_builds += 1
 
-    def prepare_round(self):
+    def prepare_round(
+        self,
+        current_round: int | None = None
+    ):
         """
-        Build all routes using the current
-        energy/load snapshot.
+        Build or reuse routes using the current energy/load snapshot.
+        Rebuilds when the update interval has elapsed or when network state
+        changes (overload state, low energy transition, node death).
         """
+        if current_round is None:
+            self._round_counter += 1
+            current_round = self._round_counter
+
+        dead_nodes = {
+            sensor.node_id
+            for sensor
+            in self.network.sensors
+            if not sensor.is_alive()
+        }
+        node_died = (dead_nodes != self.prev_dead_nodes)
 
         if (
             self.algorithm
             == "minimum_hop"
         ):
+            interval_elapsed = (
+                (current_round - self.last_build_round)
+                >= self.route_update_interval_rounds
+            )
+            should_rebuild = (
+                not self.route_table
+                or node_died
+                or interval_elapsed
+            )
 
-            self._build_minimum_hop_table()
+            if should_rebuild:
+                self._build_minimum_hop_table()
+                self.last_build_round = current_round
+                self.prev_dead_nodes = dead_nodes
             return
 
         if (
             self.algorithm
             == "lb_ecmhr"
         ):
-
             # Load reflects preceding rounds
             self.load_tracker.update(
                 self.network.sensors
             )
 
-            self.route_table = (
-                self.lb_ecmhr_router
-                .build_route_table(
-                    load_factors=(
-                        self.load_tracker
-                        .load_factors
-                    ),
-                    overloaded_nodes=(
-                        self.load_tracker
-                        .overloaded_nodes
-                    )
+            overloaded_nodes = set(
+                self.load_tracker.overloaded_nodes
+            )
+            low_energy_nodes = {
+                sensor.node_id
+                for sensor
+                in self.network.sensors
+                if sensor.is_alive()
+                and (
+                    sensor.energy_ratio()
+                    <= self.energy_threshold_ratio
                 )
+            }
+
+            overload_state_changed = (
+                overloaded_nodes != self.prev_overloaded_nodes
+            )
+            energy_state_changed = (
+                low_energy_nodes != self.prev_low_energy_nodes
+            )
+            interval_elapsed = (
+                (current_round - self.last_build_round)
+                >= self.route_update_interval_rounds
             )
 
-            self.route_table_builds += 1
+            should_rebuild = (
+                not self.route_table
+                or interval_elapsed
+                or overload_state_changed
+                or energy_state_changed
+                or node_died
+            )
+
+            if should_rebuild:
+                self.route_table = (
+                    self.lb_ecmhr_router
+                    .build_route_table(
+                        load_factors=(
+                            self.load_tracker
+                            .load_factors
+                        ),
+                        overloaded_nodes=(
+                            overloaded_nodes
+                        )
+                    )
+                )
+                self.route_table_builds += 1
+                self.last_build_round = current_round
+                self.prev_overloaded_nodes = overloaded_nodes
+                self.prev_low_energy_nodes = low_energy_nodes
+                self.prev_dead_nodes = dead_nodes
             return
 
         raise ValueError(
@@ -329,18 +416,14 @@ class RouteManager:
                 )
             )
 
-        self.route_table = (
-            self.lb_ecmhr_router.build_route_table(
-                load_factors=(
-                    self.load_tracker.load_factors
-                ),
-                overloaded_nodes=(
-                    self.load_tracker.overloaded_nodes
-                )
+        return self.lb_ecmhr_router.route_source(
+            source_id=source_id,
+            load_factors=(
+                self.load_tracker.load_factors
+            ),
+            overloaded_nodes=(
+                self.load_tracker.overloaded_nodes
             )
-        )
-        return self.route_table.get(
-            source_id
         )
 
     def get_route(

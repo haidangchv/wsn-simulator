@@ -20,7 +20,13 @@ class EnvironmentalDataCollector:
         sensor
     ) -> dict:
 
-        return {
+        dt = getattr(
+            packet,
+            "simulation_datetime",
+            None
+        )
+
+        record = {
             "source_id":
                 packet.source_id,
 
@@ -46,8 +52,28 @@ class EnvironmentalDataCollector:
                 sensor.y,
 
             "payload_size_bytes":
-                packet.payload_size_bytes
+                packet.payload_size_bytes,
+
+            "timestamp":
+                dt,
+
+            "date":
+                dt.date() if dt else None,
+
+            "hour":
+                dt.hour if dt else None,
+
+            "day_of_week":
+                dt.strftime("%A") if dt else None,
+
+            "week":
+                dt.strftime("%Y-W%W") if dt else None,
+
+            "month":
+                dt.strftime("%Y-%m") if dt else None
         }
+
+        return record
 
     def record_generated(
         self,

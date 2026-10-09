@@ -25,6 +25,9 @@ from environment.analyzer import (
 from environment.degradation import (
     ZoneHistoryTracker
 )
+from simulation.simulation_clock import (
+    SimulationClock
+)
 
 
 
@@ -131,10 +134,20 @@ class WSNSimulator:
         self.total_delay_ms = 0.0
         self.total_delivered_hops = 0
 
+        self.clock = SimulationClock(
+            config
+        )
+
+        self.round_duration_seconds = (
+            self.clock.round_duration_seconds
+        )
+
+        self.rounds_per_day = (
+            self.clock.rounds_per_day
+        )
+
         self.sampling_interval_seconds = (
-            config["packet"][
-                "sampling_interval_seconds"
-            ]
+            self.round_duration_seconds
         )
 
         environment_config = (
@@ -198,6 +211,7 @@ class WSNSimulator:
         self.fnd_round = None
         self.hnd_round = None
         self.lnd_round = None
+        self.round_in_progress = False
 
         radio_config = config.get(
             "radio",
@@ -346,17 +360,23 @@ class WSNSimulator:
 
         measurement = None
 
+        simulation_datetime = (
+            self.clock.datetime_for_round(
+                self.current_round
+            )
+        )
+
+        simulation_time_seconds = (
+            self.clock.elapsed_seconds(
+                self.current_round
+            )
+        )
+
         if (
             self.environment_enabled
             and
             sensor.is_alive()
         ):
-
-            simulation_time_seconds = (
-                self.current_round
-                *
-                self.sampling_interval_seconds
-            )
 
             measurement = (
                 self.environment_generator.generate(
@@ -368,6 +388,10 @@ class WSNSimulator:
 
                     simulation_time_seconds=(
                         simulation_time_seconds
+                    ),
+
+                    timestamp=(
+                        simulation_datetime
                     )
                 )
             )
@@ -412,7 +436,11 @@ class WSNSimulator:
             simulation_time_seconds=(
                 measurement.simulation_time_seconds
                 if measurement
-                else 0.0
+                else simulation_time_seconds
+            ),
+
+            simulation_datetime=(
+                simulation_datetime
             ),
 
             raw_payload_size_bytes=(
@@ -843,39 +871,52 @@ class WSNSimulator:
 
     def run_round(self) -> None:
 
-        self.current_round += 1
-
-        self.route_manager.prepare_round()
-
-        # Snapshot of nodes alive at beginning
-        # of the round.
-        source_ids = [
-            sensor.node_id
-            for sensor in self.network.sensors
-            if sensor.is_alive()
-        ]
-
-        for source_id in source_ids:
-
-            # Sensor may have died earlier in
-            # this round while acting as relay.
-            if not self.sensor_map[
-                source_id
-            ].is_alive():
-
-                continue
-
-            self.transmit_from_sensor(
-                source_id
+        if self.round_in_progress:
+            raise RuntimeError(
+                "A simulation round is already in progress."
             )
 
-        self._update_lifetime_metrics()
+        self.round_in_progress = True
 
-        self._update_connectivity_lifetime_metrics()
+        try:
+            self.current_round += 1
 
-        self._record_environment_snapshot()
+            self.route_manager.prepare_round(
+                self.current_round
+            )
 
-        self._record_history()
+            # Snapshot of nodes alive at beginning
+            # of the round.
+            source_ids = [
+                sensor.node_id
+                for sensor in self.network.sensors
+                if sensor.is_alive()
+            ]
+
+            for source_id in source_ids:
+
+                # Sensor may have died earlier in
+                # this round while acting as relay.
+                if not self.sensor_map[
+                    source_id
+                ].is_alive():
+
+                    continue
+
+                self.transmit_from_sensor(
+                    source_id
+                )
+
+            self._update_lifetime_metrics()
+
+            self._update_connectivity_lifetime_metrics()
+
+            self._record_environment_snapshot()
+
+            self._record_history()
+
+        finally:
+            self.round_in_progress = False
 
     def _record_environment_snapshot(
         self
@@ -1186,12 +1227,32 @@ class WSNSimulator:
         self
     ) -> dict:
 
-        alive_ids = {
+        alive_ids = frozenset(
             sensor.node_id
             for sensor
             in self.network.sensors
             if sensor.is_alive()
-        }
+        )
+
+        low_energy_ids = frozenset(
+            sensor.node_id
+            for sensor
+            in self.network.sensors
+            if sensor.is_alive()
+            and (
+                sensor.energy_ratio()
+                <= self.energy_threshold_ratio
+            )
+        )
+
+        state_key = (
+            self.routing_algorithm,
+            alive_ids,
+            low_energy_ids
+        )
+
+        if getattr(self, "_cached_connectivity_key", None) == state_key:
+            return self._cached_connectivity_metrics
 
         connected_ids = (
             self.get_connected_alive_sensor_ids()
@@ -1223,7 +1284,7 @@ class WSNSimulator:
 
             ratio = 0.0
 
-        return {
+        res = {
             "connected_alive_nodes":
                 connected_count,
 
@@ -1233,6 +1294,10 @@ class WSNSimulator:
             "connectivity_ratio":
                 ratio
         }
+
+        self._cached_connectivity_key = state_key
+        self._cached_connectivity_metrics = res
+        return res
 
     def _update_connectivity_lifetime_metrics(
         self
@@ -1340,15 +1405,42 @@ class WSNSimulator:
 
     def run(
         self,
-        rounds: int
+        rounds: int,
+        progress_callback = None,
+        batch_size: int = 24
     ) -> None:
 
-        for _ in range(rounds):
+        from simulation.checkpoint import (
+            auto_checkpoint
+        )
+
+        checkpoint_config = (
+            self.config.get(
+                "checkpoint",
+                {}
+            )
+        )
+
+        for i in range(rounds):
 
             if self.lnd_round is not None:
                 break
 
             self.run_round()
+
+            if checkpoint_config.get(
+                "auto_save",
+                False
+            ):
+                auto_checkpoint(
+                    simulator=self,
+                    config=self.config,
+                    checkpoint_config=checkpoint_config
+                )
+
+            if progress_callback is not None:
+                if (i + 1) % batch_size == 0 or (i + 1) == rounds:
+                    progress_callback(i + 1, rounds)
 
     def _record_history(self) -> None:
         """
@@ -1394,8 +1486,9 @@ class WSNSimulator:
         )
 
         elapsed_seconds = (
-            self.current_round
-            * self.sampling_interval_seconds
+            self.clock.elapsed_seconds(
+                self.current_round
+            )
         )
 
         # Packet Delivery Ratio
@@ -1567,8 +1660,21 @@ class WSNSimulator:
             "round":
                 self.current_round,
 
+            "simulation_datetime":
+                self.clock.datetime_for_round(
+                    max(self.current_round, 1)
+                ),
+
             "elapsed_seconds":
                 elapsed_seconds,
+
+            "elapsed_days":
+                self.clock.elapsed_days(
+                    self.current_round
+                ),
+
+            "rounds_per_day":
+                self.rounds_per_day,
 
             "alive_nodes":
                 alive,

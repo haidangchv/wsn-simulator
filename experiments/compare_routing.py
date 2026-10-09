@@ -17,8 +17,9 @@ from topology.deployment import (
 def run_one_algorithm(
     config: dict,
     algorithm: str,
-    rounds: int
-) -> dict:
+    rounds: int,
+    return_simulator: bool = False
+):
 
     experiment_config = (
         deepcopy(config)
@@ -58,26 +59,32 @@ def run_one_algorithm(
         "algorithm"
     ] = algorithm
 
+    if return_simulator:
+        return metrics, simulator
+
     return metrics
 
 
 def compare_algorithms(
     config: dict,
-    rounds: int = 100
-) -> pd.DataFrame:
+    rounds: int = 100,
+    return_history: bool = False
+):
 
     results = []
+    history_data = {}
 
     for algorithm in [
         "minimum_hop",
         "lb_ecmhr"
     ]:
 
-        metrics = (
+        metrics, simulator = (
             run_one_algorithm(
                 config=config,
                 algorithm=algorithm,
-                rounds=rounds
+                rounds=rounds,
+                return_simulator=True
             )
         )
 
@@ -85,6 +92,18 @@ def compare_algorithms(
             metrics
         )
 
-    return pd.DataFrame(
+        history_data[algorithm] = {
+            "metrics": metrics,
+            "history": simulator.history,
+            "fnd_round": simulator.fnd_round,
+            "total_nodes": len(simulator.network.sensors)
+        }
+
+    df = pd.DataFrame(
         results
     )
+
+    if return_history:
+        return df, history_data
+
+    return df
