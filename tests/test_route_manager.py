@@ -37,7 +37,7 @@ class RouteManagerMidRoundRerouteTest(
                 "energy_threshold_ratio": 0.20
             },
             "routing": {
-                "algorithm": "lb_ecmhr"
+                "algorithm": "ecmhr"
             }
         }
 
@@ -82,7 +82,7 @@ class RouteManagerMidRoundRerouteTest(
         self.route_manager = RouteManager(
             network=self.network,
             config=self.config,
-            algorithm="lb_ecmhr"
+            algorithm="ecmhr"
         )
 
     def test_mid_round_reroute_when_relay_energy_drops(
@@ -276,7 +276,25 @@ class RouteManagerMidRoundRerouteTest(
         self.route_manager.prepare_round(current_round=10)
         self.assertEqual(self.route_manager.route_table_builds, 4)
 
+    def test_rebuild_when_sink_moves(self):
+        """
+        Verify that route table is rebuilt when Sink changes position,
+        even if within the normal interval.
+        """
+        self.route_manager.prepare_round(current_round=1)
+        self.assertEqual(self.route_manager.route_table_builds, 1)
+
+        # Round 2: no movement -> reuse
+        self.route_manager.prepare_round(current_round=2)
+        self.assertEqual(self.route_manager.route_table_builds, 1)
+
+        # Sink moves to new coordinates
+        self.network.update_sink_position(200.0, 200.0)
+        self.route_manager.prepare_round(current_round=3)
+        self.assertEqual(self.route_manager.route_table_builds, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

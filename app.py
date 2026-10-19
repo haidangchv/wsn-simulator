@@ -374,8 +374,8 @@ st.sidebar.subheader(
 routing_options = {
     "Minimum-Hop BFS":
         "minimum_hop",
-    "LB-ECMHR (Load Balanced)":
-        "lb_ecmhr"
+    "Pure ECMHR (Energy-Constrained)":
+        "ecmhr"
 }
 
 configured_algorithm = current_config.get(
@@ -383,8 +383,10 @@ configured_algorithm = current_config.get(
     {}
 ).get(
     "algorithm",
-    "lb_ecmhr"
+    "ecmhr"
 )
+if configured_algorithm == "lb_ecmhr":
+    configured_algorithm = "ecmhr"
 
 algo_label = next(
     (
@@ -392,7 +394,7 @@ algo_label = next(
         for label, val in routing_options.items()
         if val == configured_algorithm
     ),
-    "LB-ECMHR (Load Balanced)"
+    "Pure ECMHR (Energy-Constrained)"
 )
 
 selected_label = st.sidebar.selectbox(
@@ -404,89 +406,50 @@ selected_label = st.sidebar.selectbox(
         routing_options.keys()
     ).index(
         algo_label
-    )
+    ),
+    help="ECMHR định tuyến theo đường ngắn nhất qua các node còn pin (>20%), không phân tán tải tại tầng routing."
 )
 
 selected_routing = routing_options[
     selected_label
 ]
 
-load_window = 20
-overload_factor = 2.0
-recovery_factor = 1.2
-max_extra_hops = 1
+st.sidebar.markdown(
+    "### 🚚 Mobile Sink (Chống Energy Hole)"
+)
 
-if selected_routing == "lb_ecmhr":
+mobile_sink_defaults = current_config.get("mobile_sink", {})
 
-    st.sidebar.markdown(
-        "### ⚖️ Load Balancing"
+mobile_sink_enabled = st.sidebar.checkbox(
+    "Bật Adaptive Mobile Sink",
+    value=bool(mobile_sink_defaults.get("enabled", True)),
+    help="Di chuyển Sink chủ động để giải tỏa áp lực relay quanh Sink và chống hiện tượng thắt cổ chai năng lượng."
+)
+
+if mobile_sink_enabled:
+    sink_eval_interval = st.sidebar.slider(
+        "Chu kỳ đánh giá (rounds)",
+        min_value=1,
+        max_value=24,
+        value=int(mobile_sink_defaults.get("evaluation_interval_rounds", 6)),
+        step=1,
+        help="Số vòng giữa mỗi lần kiểm tra 3 tín hiệu cảnh báo áp lực quanh Sink"
     )
-
-    lb_defaults = current_config.get(
-        "routing",
-        {}
-    ).get(
-        "lb_ecmhr",
-        {}
+    sink_dwell_time = st.sidebar.slider(
+        "Thời gian dừng tối thiểu (rounds)",
+        min_value=6,
+        max_value=72,
+        value=int(mobile_sink_defaults.get("minimum_dwell_rounds", 24)),
+        step=6,
+        help="Số round Sink phải dừng cố định tại một waypoint trước khi được phép di chuyển tiếp"
     )
-
-    load_window = st.sidebar.slider(
-        "Load Window (rounds)",
-        min_value=5,
-        max_value=100,
-        value=int(
-            lb_defaults.get(
-                "load_window_rounds",
-                20
-            )
-        ),
-        step=5
+    st.sidebar.caption(
+        "📍 **Dynamic Candidates:** 36 vị trí ứng viên động quanh Sink (bán kính 400m, 550m, 700m × 12 hướng). "
+        "Miền an toàn [200, 1800]m, cấm quay lại vùng cũ (Tabu 72h) và ngưỡng cải thiện tối thiểu 10%."
     )
-
-    overload_factor = st.sidebar.slider(
-        "Overload Factor",
-        min_value=1.2,
-        max_value=4.0,
-        value=float(
-            lb_defaults.get(
-                "overload_factor",
-                2.0
-            )
-        ),
-        step=0.1
-    )
-
-    recovery_factor = st.sidebar.slider(
-        "Recovery Factor",
-        min_value=0.5,
-        max_value=1.9,
-        value=float(
-            lb_defaults.get(
-                "recovery_factor",
-                1.2
-            )
-        ),
-        step=0.1
-    )
-
-    max_extra_hops = st.sidebar.slider(
-        "Maximum Extra Hops",
-        min_value=0,
-        max_value=3,
-        value=int(
-            lb_defaults.get(
-                "max_extra_hops",
-                1
-            )
-        ),
-        step=1
-    )
-
-    if recovery_factor >= overload_factor:
-        st.sidebar.error(
-            "Recovery Factor must be smaller than Overload Factor."
-        )
-        st.stop()
+else:
+    sink_eval_interval = 6
+    sink_dwell_time = 24
 
 
 # -----------------------------------------
@@ -544,7 +507,7 @@ st.sidebar.subheader("⚡ Chế độ Mô phỏng")
 sim_mode_choice = st.sidebar.radio(
     "Hiệu năng mô phỏng",
     options=["🚀 Fast (Khuyên dùng khi chạy dài)", "🔍 Detailed (Phân tích chi tiết)"],
-    index=0 if current_config.get("routing", {}).get("lb_ecmhr", {}).get("route_update_interval_rounds", 6) >= 6 else 1,
+    index=0 if current_config.get("routing", {}).get("ecmhr", {}).get("route_update_interval_rounds", 6) >= 6 else 1,
     help="Fast Mode: route update mỗi 6h, phân tích môi trường mỗi 24h, UI cập nhật batch 24 rounds.\nDetailed Mode: route update mỗi 1h, phân tích môi trường mỗi 6h, UI cập nhật batch 6 rounds."
 )
 
@@ -560,9 +523,9 @@ else:
 # Dynamically synchronize settings
 if "routing" not in st.session_state.config:
     st.session_state.config["routing"] = {}
-if "lb_ecmhr" not in st.session_state.config["routing"]:
-    st.session_state.config["routing"]["lb_ecmhr"] = {}
-st.session_state.config["routing"]["lb_ecmhr"]["route_update_interval_rounds"] = mode_route_interval
+if "ecmhr" not in st.session_state.config["routing"]:
+    st.session_state.config["routing"]["ecmhr"] = {}
+st.session_state.config["routing"]["ecmhr"]["route_update_interval_rounds"] = mode_route_interval
 if "environment" in st.session_state.config:
     st.session_state.config["environment"]["analysis_interval_rounds"] = mode_env_interval
 
@@ -622,15 +585,15 @@ if st.sidebar.button(
         "algorithm"
     ] = selected_routing
 
-    if selected_routing == "lb_ecmhr":
-        if "lb_ecmhr" not in new_config["routing"]:
-            new_config["routing"]["lb_ecmhr"] = {}
-        lb_config = new_config["routing"]["lb_ecmhr"]
-        lb_config["load_window_rounds"] = int(load_window)
-        lb_config["overload_factor"] = float(overload_factor)
-        lb_config["recovery_factor"] = float(recovery_factor)
-        lb_config["max_extra_hops"] = int(max_extra_hops)
-        lb_config["route_update_interval_rounds"] = mode_route_interval
+    if "ecmhr" not in new_config["routing"]:
+        new_config["routing"]["ecmhr"] = {}
+    new_config["routing"]["ecmhr"]["route_update_interval_rounds"] = mode_route_interval
+
+    if "mobile_sink" not in new_config:
+        new_config["mobile_sink"] = {}
+    new_config["mobile_sink"]["enabled"] = bool(mobile_sink_enabled)
+    new_config["mobile_sink"]["evaluation_interval_rounds"] = int(sink_eval_interval)
+    new_config["mobile_sink"]["minimum_dwell_rounds"] = int(sink_dwell_time)
 
     if "environment" not in new_config:
         new_config["environment"] = {}
@@ -1205,15 +1168,53 @@ with route_col2:
 # NETWORK MAP
 # =========================================
 
-overloaded_nodes = set()
-if (
-    getattr(simulator, "routing_algorithm", None) == "lb_ecmhr"
-    and hasattr(simulator, "route_manager")
-    and hasattr(simulator.route_manager, "load_tracker")
-):
-    overloaded_nodes = (
-        simulator.route_manager.load_tracker.overloaded_nodes
+map_header_col1, map_header_col2, map_header_col3 = st.columns([2.5, 1.3, 1.2])
+
+with map_header_col1:
+    st.subheader("🗺️ Bản đồ Mạng WSN & Vị trí Sink")
+
+with map_header_col2:
+    show_sink_trail = st.checkbox(
+        "Vệt di chuyển Sink",
+        value=True,
+        help="Hiển thị quỹ đạo và các bước di chuyển của Mobile Sink"
     )
+
+with map_header_col3:
+    if st.button(
+        "🔄 Cập nhật bản đồ",
+        use_container_width=True,
+        key="btn_manual_refresh_map",
+        help="Vẽ lại bản đồ với vị trí Sink mới nhất, các cạnh kết nối và vệt di chuyển"
+    ):
+        st.session_state.edge_geometry = build_edge_geometry(network)
+        st.session_state.last_sink_pos_geometry = (network.sink.x, network.sink.y)
+        st.session_state.map_rev = st.session_state.get("map_rev", 0) + 1
+        st.session_state.selected_route = None
+        st.rerun()
+
+overloaded_nodes = set()
+if simulator.sink_controller is not None:
+    near_sink = simulator.sink_controller.stress_monitor.get_near_sink_relays()
+    if simulator.sink_controller.last_snapshot is not None:
+        snap = simulator.sink_controller.last_snapshot
+        if snap.alert_load or snap.alert_drain or snap.alert_concentration:
+            overloaded_nodes = near_sink
+
+# Tự động cập nhật edge_geometry khi vị trí Sink thay đổi
+current_sink_pos = (network.sink.x, network.sink.y)
+if (
+    "edge_geometry" not in st.session_state
+    or st.session_state.get("last_sink_pos_geometry") != current_sink_pos
+):
+    st.session_state.edge_geometry = build_edge_geometry(network)
+    st.session_state.last_sink_pos_geometry = current_sink_pos
+
+sink_history_to_draw = (
+    simulator.sink_controller.movement_history
+    if (simulator.sink_controller and show_sink_trail)
+    else None
+)
 
 network_figure = (
     create_network_figure(
@@ -1223,17 +1224,60 @@ network_figure = (
         edge_geometry=st.session_state.get(
             "edge_geometry"
         ),
-        overloaded_nodes=overloaded_nodes
+        overloaded_nodes=overloaded_nodes,
+        sink_waypoints=simulator.sink_controller.waypoints if simulator.sink_controller else None,
+        sink_movement_history=sink_history_to_draw
     )
 )
+
+map_chart_key = f"network_map_rev{st.session_state.get('map_rev', 0)}_r{simulator.current_round}"
 
 st.plotly_chart(
     network_figure,
     use_container_width=True,
-    key="network_map",
+    key=map_chart_key,
     on_select="rerun",
     selection_mode="points"
 )
+
+# -----------------------------------------
+# SINK MOVEMENT HISTORY TABLE
+# -----------------------------------------
+if simulator.sink_controller is not None:
+    moves = [d for d in simulator.sink_controller.movement_history if getattr(d, "moved", False)]
+    moves_count = len(moves)
+    exp_title = f"📜 Lịch sử các bước di chuyển của Mobile Sink ({moves_count} lần chuyển vị trí)"
+    with st.expander(exp_title, expanded=(moves_count > 0)):
+        if moves_count > 0:
+            move_records = []
+            for idx, m in enumerate(moves):
+                snap = getattr(m, "stress_snapshot", None)
+                overload_txt = f"{snap.overloaded_ratio:.1%}" if snap else "N/A"
+                drain_txt = f"{snap.drain_ratio:.2f}x" if snap else "N/A"
+                conc_txt = f"{snap.max_route_concentration:.1%}" if snap else "N/A"
+                imp_val = getattr(m, "improvement_ratio", 0.0)
+                imp_txt = f"{imp_val * 100:.1f}%" if imp_val > 0 else "N/A"
+
+                move_records.append({
+                    "Bước": f"#{idx + 1}",
+                    "Round": m.current_round,
+                    "Thời gian": f"{round_to_days(m.current_round, simulator.rounds_per_day):.1f} ngày",
+                    "Từ vị trí": f"{m.from_waypoint} ({m.from_pos[0]:.0f}, {m.from_pos[1]:.0f})",
+                    "Đến vị trí": f"{m.to_waypoint} ({m.to_pos[0]:.0f}, {m.to_pos[1]:.0f})",
+                    "Cự ly (m)": round(m.distance_m, 1),
+                    "Cải thiện J": imp_txt,
+                    "Tải relay L_i": overload_txt,
+                    "Tụt pin D_i": drain_txt,
+                    "Hội tụ C_i": conc_txt,
+                    "Lý do": m.reason
+                })
+            move_df = pd.DataFrame(move_records)
+            st.dataframe(move_df, use_container_width=True, hide_index=True)
+        else:
+            st.info(
+                f"📍 Sink hiện đang ở vị trí ban đầu: Waypoint {getattr(network.sink, 'current_waypoint', 'CENTER')} "
+                f"({network.sink.x:.1f}, {network.sink.y:.1f}). Chưa có lần di chuyển nào (chờ cảnh báo áp lực tải relay sau khi mô phỏng)."
+            )
 
 
 # =========================================
@@ -1249,24 +1293,28 @@ st.subheader(
 def run_simulation_batch(sim, num_rounds: int, label: str = ""):
     if num_rounds <= 5:
         sim.run(rounds=num_rounds)
-        return
+    else:
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
 
-    progress_bar = st.progress(0.0)
-    status_text = st.empty()
+        def update_progress(current, total):
+            progress_bar.progress(min(current / total, 1.0))
+            status_text.caption(
+                f"⏳ {label or 'Đang mô phỏng'}: {current:,} / {total:,} rounds (Round hiện tại: {sim.current_round:,})"
+            )
 
-    def update_progress(current, total):
-        progress_bar.progress(min(current / total, 1.0))
-        status_text.caption(
-            f"⏳ {label or 'Đang mô phỏng'}: {current:,} / {total:,} rounds (Round hiện tại: {sim.current_round:,})"
+        sim.run(
+            rounds=num_rounds,
+            progress_callback=update_progress,
+            batch_size=mode_ui_batch
         )
+        progress_bar.empty()
+        status_text.empty()
 
-    sim.run(
-        rounds=num_rounds,
-        progress_callback=update_progress,
-        batch_size=mode_ui_batch
-    )
-    progress_bar.empty()
-    status_text.empty()
+    # Tự động cập nhật edge geometry và bản đồ ngay sau khi chạy xong
+    st.session_state.edge_geometry = build_edge_geometry(sim.network)
+    st.session_state.last_sink_pos_geometry = (sim.network.sink.x, sim.network.sink.y)
+    st.session_state.map_rev = st.session_state.get("map_rev", 0) + 1
 
 
 sim_col_rounds, sim_col_time = st.columns(2)
@@ -1786,77 +1834,69 @@ rm4.metric(
     )
 )
 
-if getattr(simulator, "routing_algorithm", None) == "lb_ecmhr":
+if getattr(simulator, "mobile_sink_enabled", False) and simulator.sink_controller is not None:
 
     st.subheader(
-        "⚖️ Relay Load Balancing"
+        "🚚 Adaptive Mobile Sink & Early Warning Stress Monitor"
     )
 
-    lb_metrics = (
+    sink_m = (
         simulator.get_metrics()
     )
 
-    l1, l2, l3, l4 = (
+    c1, c2, c3, c4 = (
         st.columns(4)
     )
 
-    l1.metric(
-        "Active Relays",
-        lb_metrics.get(
-            "active_relay_count",
-            0
-        )
+    wp_name = sink_m.get("sink_waypoint", "CENTER")
+    sx = sink_m.get("sink_x", 0.0)
+    sy = sink_m.get("sink_y", 0.0)
+    moves = sink_m.get("sink_movement_count", 0)
+    dist_total = sink_m.get("sink_total_distance_m", 0.0)
+
+    c1.metric(
+        "Vị trí Sink hiện tại",
+        f"{wp_name} ({sx:.0f}, {sy:.0f})",
+        help="Waypoint và tọa độ Sink hiện hành"
     )
 
-    l2.metric(
-        "Overloaded Relays",
-        lb_metrics.get(
-            "overloaded_relay_count",
-            0
-        )
+    c2.metric(
+        "Số lần di chuyển",
+        f"{moves} lần",
+        f"Quãng đường: {dist_total:.0f} m"
     )
 
-    l3.metric(
-        "Relay Load CV",
-        (
-            f"{lb_metrics.get('relay_load_cv', 0.0):.3f}"
-        )
+    c3.metric(
+        "Tải chuyển tiếp (L_i)",
+        f"{sink_m.get('near_sink_overloaded_ratio', 0.0):.1%}",
+        help="Tỷ lệ relay quanh Sink chịu tải chuyển tiếp cao trong cửa sổ 24h (ngưỡng 1.8x)"
     )
 
-    l4.metric(
-        "Max Relay Load",
-        lb_metrics.get(
-            "max_relay_load",
-            0
-        )
+    c4.metric(
+        "Tốc độ tụt pin (D_i)",
+        f"{sink_m.get('near_sink_drain_ratio', 1.0):.2f}x",
+        help="Tỷ lệ tốc độ mất pin của relay quanh Sink so với toàn mạng (ngưỡng 1.5x)"
     )
 
-    r1, r2, r3 = (
-        st.columns(3)
-    )
-
-    r1.metric(
-        "Detour Routes",
-        lb_metrics.get(
-            "detour_route_count",
-            0
+    s1, s2 = st.columns([1, 2])
+    with s1:
+        max_conc = sink_m.get("max_route_concentration", 0.0)
+        is_alert = sink_m.get("sink_stress_alert", False)
+        st.metric(
+            "Hội tụ đường truyền (C_i)",
+            f"{max_conc:.1%}",
+            delta="🔴 ÁP LỰC CAO" if is_alert else "🟢 ỔN ĐỊNH",
+            delta_color="inverse" if is_alert else "normal"
         )
-    )
-
-    r2.metric(
-        "Overload Fallbacks",
-        lb_metrics.get(
-            "overload_fallback_route_count",
-            0
-        )
-    )
-
-    r3.metric(
-        "Avg Route Load",
-        (
-            f"{lb_metrics.get('average_route_max_relay_load', 0.0):.2f}"
-        )
-    )
+    with s2:
+        last_dec = simulator.last_sink_decision
+        if last_dec is not None:
+            if last_dec.moved:
+                st.info(f"🚀 **Vòng {last_dec.current_round}**: {last_dec.reason}")
+            else:
+                st.caption(f"Trạng thái đánh giá gần nhất (Round {last_dec.current_round}): {last_dec.reason}")
+        else:
+            st.caption("Chưa có quyết định di chuyển nào được ghi nhận.")
 
 
 # =========================================
@@ -2177,26 +2217,41 @@ comparison_rounds = (
     )
 )
 
-if st.button(
-    "Compare Minimum-Hop vs LB-ECMHR",
-    type="primary"
-):
+comp_btn_col1, comp_btn_col2 = st.columns(2)
 
+with comp_btn_col1:
+    btn_algo = st.button(
+        "⚡ So sánh: Min-Hop vs ECMHR + Adaptive Sink",
+        type="primary",
+        use_container_width=True
+    )
+
+with comp_btn_col2:
+    btn_mobility = st.button(
+        "🚚 So sánh: Fixed Sink vs Adaptive Mobile Sink",
+        use_container_width=True
+    )
+
+if btn_algo or btn_mobility:
     with st.spinner(
-        f"Running routing comparison ({comparison_rounds} rounds)..."
+        f"Đang chạy mô phỏng đối sánh ({comparison_rounds} rounds)..."
     ):
-
-        comparison_df, history_data = (
-            compare_algorithms(
-                config=(
-                    st.session_state.config
-                ),
-                rounds=int(
-                    comparison_rounds
-                ),
+        if btn_mobility:
+            from experiments.compare_routing import compare_sink_mobility
+            comparison_df, history_data = compare_sink_mobility(
+                config=st.session_state.config,
+                rounds=int(comparison_rounds),
+                algorithm="ecmhr",
                 return_history=True
             )
-        )
+            st.session_state["comparison_mode"] = "mobility"
+        else:
+            comparison_df, history_data = compare_algorithms(
+                config=st.session_state.config,
+                rounds=int(comparison_rounds),
+                return_history=True
+            )
+            st.session_state["comparison_mode"] = "routing"
 
         st.session_state["comparison_df"] = (
             comparison_df
@@ -2219,6 +2274,7 @@ if (
 
     display_columns = [
         "algorithm",
+        "sink_mode",
         "alive_nodes",
         "dead_nodes",
         "pdr",
@@ -2226,8 +2282,7 @@ if (
         "total_energy_consumed_j",
         "energy_efficiency_bits_per_j",
         "fnd_round",
-        "relay_load_cv",
-        "overloaded_relay_count"
+        "sink_movement_count"
     ]
 
     valid_cols = [
@@ -2246,46 +2301,49 @@ if (
     # -------------------------------------
     # FND DISPLAY
     # -------------------------------------
-    fnd_mh = (
-        history_data.get("minimum_hop", {})
-        .get("fnd_round")
-    )
-    fnd_lb = (
-        history_data.get("lb_ecmhr", {})
-        .get("fnd_round")
-    )
+    is_mobility_comp = st.session_state.get("comparison_mode") == "mobility"
+    if is_mobility_comp:
+        fnd_first = history_data.get("Fixed Sink", {}).get("fnd_round")
+        fnd_second = history_data.get("Adaptive Mobile Sink", {}).get("fnd_round")
+        first_label = "🟠 FND - Fixed Sink"
+        second_label = "🔵 FND - Adaptive Mobile Sink"
+    else:
+        fnd_first = history_data.get("minimum_hop", {}).get("fnd_round")
+        fnd_second = history_data.get("ecmhr", history_data.get("lb_ecmhr", {})).get("fnd_round")
+        first_label = "🟠 FND - Minimum-Hop"
+        second_label = "🔵 FND - ECMHR + Adaptive Sink"
 
     st.markdown("#### 🏁 Thời điểm First Node Dead (FND)")
     fnd_c1, fnd_c2, fnd_c3 = st.columns([1, 1, 1.2])
 
     with fnd_c1:
         st.metric(
-            "🟠 FND - Minimum-Hop",
-            f"Round {fnd_mh}" if fnd_mh is not None else "Chưa có (100% còn sống)",
-            help="Vòng đầu tiên mà một node bất kỳ trong mạng cạn kiệt năng lượng (Minimum-Hop)"
+            first_label,
+            f"Round {fnd_first}" if fnd_first is not None else "Chưa có (100% còn sống)",
+            help="Vòng đầu tiên mà một node bất kỳ trong mạng cạn kiệt năng lượng"
         )
 
     with fnd_c2:
         st.metric(
-            "🔵 FND - LB-ECMHR",
-            f"Round {fnd_lb}" if fnd_lb is not None else "Chưa có (100% còn sống)",
-            help="Vòng đầu tiên mà một node bất kỳ trong mạng cạn kiệt năng lượng (LB-ECMHR)"
+            second_label,
+            f"Round {fnd_second}" if fnd_second is not None else "Chưa có (100% còn sống)",
+            help="Vòng đầu tiên mà một node bất kỳ trong mạng cạn kiệt năng lượng"
         )
 
     with fnd_c3:
-        if fnd_mh is not None and fnd_lb is not None:
-            delta_fnd = fnd_lb - fnd_mh
-            pct = (delta_fnd / fnd_mh * 100) if fnd_mh > 0 else 0
+        if fnd_first is not None and fnd_second is not None:
+            delta_fnd = fnd_second - fnd_first
+            pct = (delta_fnd / fnd_first * 100) if fnd_first > 0 else 0
             st.metric(
                 "⏳ Hiệu quả cải thiện FND",
                 f"{delta_fnd:+d} rounds",
-                delta=f"{pct:+.1f}% so với Min-Hop"
+                delta=f"{pct:+.1f}% cải thiện"
             )
-        elif fnd_mh is not None and fnd_lb is None:
+        elif fnd_first is not None and fnd_second is None:
             st.metric(
                 "⏳ Hiệu quả cải thiện FND",
-                f"> +{int(comparison_rounds) - fnd_mh} rounds",
-                delta="LB-ECMHR chưa có node chết!"
+                f"> +{int(comparison_rounds) - fnd_first} rounds",
+                delta="Cấu hình thứ 2 chưa có node chết!"
             )
         else:
             st.metric(
@@ -2329,7 +2387,7 @@ if (
 
     st.caption(
         "💡 **Ghi chú đánh giá:** "
-        "🟠 **Minimum-Hop** (màu cam) | 🔵 **LB-ECMHR** (màu xanh). "
+        "🟠 **Đường màu cam** (Baseline) | 🔵 **Đường màu xanh** (Cấu hình tối ưu). "
         "Ở biểu đồ 1, 2 và 4: đường **cao hơn** là tốt hơn; "
         "ở biểu đồ 3: đường **thấp hơn** là tốt hơn (chi phí năng lượng J/KB thấp hơn)."
     )
@@ -2350,39 +2408,23 @@ with st.expander(
     for sensor in network.sensors:
 
         recent_fwd = 0
-        load_fac = 0.0
-        is_ovld = False
+        is_near_sink = False
+        is_stressed = False
 
-        if (
-            getattr(simulator, "routing_algorithm", None) == "lb_ecmhr"
-            and hasattr(simulator, "route_manager")
-            and hasattr(simulator.route_manager, "load_tracker")
-        ):
-            recent_fwd = (
-                simulator
-                .route_manager
-                .load_tracker
-                .get_recent_forwarded(
-                    sensor.node_id
-                )
-            )
-            load_fac = round(
-                simulator
-                .route_manager
-                .load_tracker
-                .get_load_factor(
-                    sensor.node_id
-                ),
-                2
-            )
-            is_ovld = (
-                simulator
-                .route_manager
-                .load_tracker
-                .is_overloaded(
-                    sensor.node_id
-                )
-            )
+        if simulator.sink_controller is not None:
+            stress_mon = simulator.sink_controller.stress_monitor
+            if hasattr(stress_mon, "get_node_forwarded_in_window"):
+                recent_fwd = stress_mon.get_node_forwarded_in_window(sensor.node_id)
+            elif hasattr(stress_mon, "forwarded_history"):
+                hist = stress_mon.forwarded_history.get(sensor.node_id)
+                recent_fwd = sum(hist) if hist else 0
+
+            if hasattr(stress_mon, "get_near_sink_relays"):
+                is_near_sink = sensor.node_id in stress_mon.get_near_sink_relays()
+
+            if is_near_sink and simulator.sink_controller.last_snapshot is not None:
+                snap = simulator.sink_controller.last_snapshot
+                is_stressed = getattr(snap, "should_alert", getattr(snap, "stress_alert", False))
 
         node_records.append({
             "ID":
@@ -2429,11 +2471,11 @@ with st.expander(
             "recent_forwarded":
                 recent_fwd,
 
-            "load_factor":
-                load_fac,
+            "near_sink":
+                is_near_sink,
 
-            "overloaded":
-                is_ovld
+            "stressed":
+                is_stressed
         })
 
     node_df = pd.DataFrame(

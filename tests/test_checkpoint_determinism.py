@@ -81,12 +81,24 @@ class CheckpointDeterminismTest(unittest.TestCase):
             self.assertEqual(sa.forwarded_packets, sb.forwarded_packets)
             self.assertEqual(sa.death_round, sb.death_round)
 
-        # 3. LB-ECMHR load tracker comparison
-        tracker_a = sim_a.route_manager.load_tracker
-        tracker_b = restored.route_manager.load_tracker
-        self.assertEqual(tracker_a.overloaded_nodes, tracker_b.overloaded_nodes)
-        self.assertEqual(tracker_a.recent_forwarded, tracker_b.recent_forwarded)
-        self.assertEqual(tracker_a.load_factors, tracker_b.load_factors)
+        # 3. Mobile Sink & Route state comparison
+        if sim_a.sink_controller is not None:
+            self.assertEqual(
+                sim_a.sink_controller.current_waypoint_idx,
+                restored.sink_controller.current_waypoint_idx
+            )
+            self.assertEqual(
+                (sim_a.network.sink.x, sim_a.network.sink.y),
+                (restored.network.sink.x, restored.network.sink.y)
+            )
+            self.assertEqual(
+                sim_a.sink_controller.consecutive_alerts,
+                restored.sink_controller.consecutive_alerts
+            )
+            self.assertEqual(
+                len(sim_a.sink_controller.movement_history),
+                len(restored.sink_controller.movement_history)
+            )
 
         # 4. Environment generator & RNG comparison
         rng_state_a = sim_a.environment_generator.rng.bit_generator.state

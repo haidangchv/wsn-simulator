@@ -46,33 +46,67 @@ simulation:
     round_duration_minutes: 60
 
 routing:
-  algorithm: "lb_ecmhr"
+  algorithm: "ecmhr"
 
   energy_threshold_ratio: 0.15
 
-  lb_ecmhr:
-    # Tải relay được tính trên bao nhiêu round gần nhất
-    load_window_rounds: 10
-
-    # Relay có tải >= 1.5 lần mức trung bình
-    # được xem là overloaded
-    overload_factor: 1.5
-
-    # Relay overloaded chỉ được phục hồi khi
-    # tải giảm xuống <= 1.1 lần trung bình
-    recovery_factor: 1.1
-
-    # Cho phép đi vòng tối đa 1 hop
-    # để tránh hotspot
-    max_extra_hops: 1
-
-    # Nếu không có đường tránh overload hợp lệ,
-    # vẫn dùng relay overloaded để duy trì connectivity
-    allow_overload_fallback: true
-
-    # Performance
+  ecmhr:
+    # Chu kỳ kiểm tra cập nhật bảng định tuyến (rounds)
     route_update_interval_rounds: 6
-    candidate_routes_per_source: 6
+
+mobile_sink:
+  enabled: true
+  mode: "adaptive_dynamic"
+
+  # Chu kỳ đánh giá áp lực (6 round = 6 giờ)
+  evaluation_interval_rounds: 6
+
+  # Cửa sổ theo dõi tải và drain rate (24 round = 24 giờ)
+  load_window_rounds: 24
+
+  # Relay có tải >= 1.8 lần mức trung bình được xem là stressed
+  overload_factor: 1.8
+
+  # Ngưỡng tỷ lệ relay gần Sink bị quá tải
+  overloaded_ratio_threshold: 0.30
+
+  # Ngưỡng tỷ lệ tiêu hao năng lượng vùng Sink so với toàn mạng
+  drain_ratio_threshold: 1.50
+
+  # Ngưỡng tỷ lệ hội tụ route qua một relay
+  route_concentration_threshold: 0.30
+
+  # Số chu kỳ đánh giá liên tiếp thỏa mãn trước khi ra lệnh di chuyển
+  trigger_persistence: 2
+
+  # Thời gian dừng tối thiểu tại một vị trí trước khi di chuyển tiếp (24 round = 1 ngày)
+  minimum_dwell_rounds: 24
+
+  # Cơ chế chống quay lại vùng cũ (Tabu)
+  return_tabu_rounds: 72
+  tabu_radius_m: 300
+
+  # Giới hạn cự ly di chuyển mỗi lần (m)
+  min_move_distance_m: 400
+  max_move_distance_m: 700
+
+  # Các bán kính sinh candidate động quanh vị trí Sink hiện tại (m)
+  candidate_radii_m:
+    - 400
+    - 550
+    - 700
+
+  # Số hướng góc quét xung quanh Sink (12 hướng x 3 bán kính = 36 candidate)
+  candidate_directions: 12
+
+  # Vùng an toàn cách mép biên mạng (m)
+  boundary_margin_m: 200
+
+  # Ngưỡng cải thiện tối thiểu để chấp nhận di chuyển (10%)
+  minimum_improvement_ratio: 0.10
+
+  # Thời gian hồi sau mỗi lần di chuyển
+  cooldown_rounds: 24
 
 sensor_types:
   temperature: 100

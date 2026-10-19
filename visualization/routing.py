@@ -159,7 +159,14 @@ def create_comparison_figures(
     import plotly.graph_objects as go
 
     mh_info = history_data.get("minimum_hop", {})
-    lb_info = history_data.get("lb_ecmhr", {})
+    if "ecmhr" in history_data:
+        lb_info = history_data.get("ecmhr", {})
+        label_second = "ECMHR + Adaptive Sink"
+        fnd_label = "FND ECMHR"
+    else:
+        lb_info = history_data.get("lb_ecmhr", {})
+        label_second = "LB-ECMHR"
+        fnd_label = "FND LB"
 
     mh_hist = mh_info.get("history", [])
     lb_hist = lb_info.get("history", [])
@@ -190,7 +197,7 @@ def create_comparison_figures(
                 line_width=1.5,
                 line_dash="dash",
                 line_color=COLOR_LB_ECMHR,
-                annotation_text=f"FND LB: R{fnd_lb}",
+                annotation_text=f"{fnd_label}: R{fnd_lb}",
                 annotation_position="top right",
                 annotation_font=dict(size=10, color=COLOR_LB_ECMHR)
             )
@@ -224,7 +231,7 @@ def create_comparison_figures(
         x=rounds_lb,
         y=conn_lb,
         mode="lines",
-        name="LB-ECMHR",
+        name=label_second,
         line=dict(color=COLOR_LB_ECMHR, width=2.5),
         hovertemplate="%{y:.2f}%"
     ))
@@ -265,7 +272,7 @@ def create_comparison_figures(
         x=rounds_lb,
         y=data_lb,
         mode="lines",
-        name="LB-ECMHR",
+        name=label_second,
         line=dict(color=COLOR_LB_ECMHR, width=2.5),
         hovertemplate=f"%{{y:.2f}} {data_unit}"
     ))
@@ -305,7 +312,7 @@ def create_comparison_figures(
         x=rounds_lb,
         y=j_kb_lb,
         mode="lines",
-        name="LB-ECMHR",
+        name=label_second,
         line=dict(color=COLOR_LB_ECMHR, width=2.5),
         hovertemplate="%{y:.4f} J/KB"
     ))
@@ -334,7 +341,7 @@ def create_comparison_figures(
         x=rounds_lb,
         y=alive_lb,
         mode="lines",
-        name="LB-ECMHR",
+        name=label_second,
         line=dict(color=COLOR_LB_ECMHR, width=2.5),
         hovertemplate="%{y} nodes"
     ))

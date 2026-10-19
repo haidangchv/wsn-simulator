@@ -36,7 +36,7 @@ class TransferMetricTest(
             places=3
         )
 
-    def test_lb_ecmhr_energy_hole_connectivity(
+    def test_ecmhr_energy_hole_connectivity(
         self
     ):
         """
@@ -103,7 +103,7 @@ class TransferMetricTest(
                 "propagation_speed_m_s": 300000000
             },
             "routing": {
-                "algorithm": "lb_ecmhr"
+                "algorithm": "ecmhr"
             },
             "environment": {
                 "enabled": False
@@ -113,7 +113,7 @@ class TransferMetricTest(
         sim = WSNSimulator(
             network=net,
             config=config,
-            routing_algorithm="lb_ecmhr"
+            routing_algorithm="ecmhr"
         )
 
         connected_ids = sim.get_connected_alive_sensor_ids()

@@ -205,4 +205,46 @@ class WirelessSensorNetwork:
                 self.connectivity_ratio()
         }
 
+    def update_sink_position(
+        self,
+        new_x: float,
+        new_y: float
+    ) -> None:
+        """
+        Cập nhật vị trí của Sink trên đồ thị mạng:
+        - Xóa các cạnh nối giữa Sink cũ với các sensor.
+        - Cập nhật tọa độ sink.x, sink.y.
+        - Dựng lại các cạnh nối giữa Sink mới với các sensor trong tầm phát sóng.
+        - Toàn bộ cạnh giữa các sensor với nhau được giữ nguyên 100%.
+        """
+        import math
+
+        sink_id = self.sink.node_id
+
+        # 1. Xóa các cạnh nối với Sink hiện tại
+        if sink_id in self.graph:
+            old_neighbors = list(self.graph.neighbors(sink_id))
+            for neighbor in old_neighbors:
+                self.graph.remove_edge(sink_id, neighbor)
+        else:
+            self.graph.add_node(sink_id, pos=(new_x, new_y))
+
+        # 2. Cập nhật tọa độ Sink
+        self.sink.x = new_x
+        self.sink.y = new_y
+        self.graph.nodes[sink_id]["pos"] = (new_x, new_y)
+
+        # 3. Kết nối lại Sink với các sensor trong tầm truyền
+        for sensor in self.sensors:
+            dist = math.hypot(
+                sensor.x - new_x,
+                sensor.y - new_y
+            )
+            if dist <= sensor.transmission_range:
+                self.graph.add_edge(
+                    sensor.node_id,
+                    sink_id,
+                    distance=dist
+                )
+
     

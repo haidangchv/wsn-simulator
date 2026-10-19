@@ -28,6 +28,10 @@ from environment.degradation import (
 from simulation.simulation_clock import (
     SimulationClock
 )
+from mobility import (
+    AdaptiveSinkController,
+    SinkDecision
+)
 
 
 
@@ -74,13 +78,16 @@ class WSNSimulator:
             )
         )
 
-        self.routing_algorithm = (
+        raw_algo = (
             routing_algorithm
             or routing_config.get(
                 "algorithm",
-                "lb_ecmhr"
+                "ecmhr"
             )
         )
+        if raw_algo == "lb_ecmhr":
+            raw_algo = "ecmhr"
+        self.routing_algorithm = raw_algo
 
         self.route_manager = RouteManager(
             network=self.network,
@@ -265,6 +272,18 @@ class WSNSimulator:
             for sensor in network.sensors
         }
 
+        mobile_sink_config = config.get("mobile_sink", {})
+        self.mobile_sink_enabled = bool(mobile_sink_config.get("enabled", True))
+        if self.mobile_sink_enabled:
+            self.sink_controller = AdaptiveSinkController(
+                network=self.network,
+                config=self.config
+            )
+        else:
+            self.sink_controller = None
+
+        self.last_sink_decision: SinkDecision | None = None
+
 
     def _active_graph(self) -> nx.Graph:
         """
@@ -291,10 +310,12 @@ class WSNSimulator:
         self,
         algorithm: str
     ) -> None:
+        if algorithm == "lb_ecmhr":
+            algorithm = "ecmhr"
 
         supported = {
             "minimum_hop",
-            "lb_ecmhr"
+            "ecmhr"
         }
 
         if algorithm not in supported:
@@ -910,6 +931,15 @@ class WSNSimulator:
             self._update_lifetime_metrics()
 
             self._update_connectivity_lifetime_metrics()
+
+            if self.sink_controller is not None:
+                self.sink_controller.record_round(self.current_round)
+                self.last_sink_decision = (
+                    self.sink_controller.evaluate_and_step(
+                        round_num=self.current_round,
+                        route_manager=self.route_manager
+                    )
+                )
 
             self._record_environment_snapshot()
 
@@ -1591,6 +1621,32 @@ class WSNSimulator:
             )
         )
 
+        sink = self.network.sink
+        sink_metrics = {
+            "sink_x": sink.x,
+            "sink_y": sink.y,
+            "sink_waypoint": getattr(sink, "current_waypoint", "CENTER"),
+            "sink_movement_count": getattr(sink, "movement_count", 0),
+            "sink_total_distance_m": getattr(sink, "total_move_distance_m", 0.0),
+            "sink_last_move_round": getattr(sink, "last_move_round", 0),
+            "sink_stress_alert": False,
+            "near_sink_overloaded_ratio": 0.0,
+            "near_sink_drain_ratio": 1.0,
+            "max_route_concentration": 0.0,
+        }
+
+        if (
+            self.sink_controller is not None
+            and self.sink_controller.last_snapshot is not None
+        ):
+            snap = self.sink_controller.last_snapshot
+            sink_metrics.update({
+                "sink_stress_alert": snap.stress_alert,
+                "near_sink_overloaded_ratio": snap.overloaded_ratio,
+                "near_sink_drain_ratio": snap.drain_ratio,
+                "max_route_concentration": snap.max_route_concentration,
+            })
+
         load_metrics = {
             "overloaded_relay_count": 0,
             "active_relay_count": 0,
@@ -1608,6 +1664,11 @@ class WSNSimulator:
                 .load_tracker
                 .get_metrics()
             )
+        elif self.sink_controller is not None and self.sink_controller.last_snapshot is not None:
+            snap = self.sink_controller.last_snapshot
+            load_metrics["overloaded_relay_count"] = 1 if snap.overloaded_ratio >= 1.8 else 0
+            load_metrics["mean_relay_load"] = snap.overloaded_ratio
+            load_metrics["max_relay_load"] = snap.overloaded_ratio
 
         route_results = [
             route
@@ -1874,7 +1935,37 @@ class WSNSimulator:
                 overload_fallback_route_count,
 
             "average_route_max_relay_load":
-                average_max_relay_load
+                average_max_relay_load,
+
+            "sink_x":
+                sink_metrics["sink_x"],
+
+            "sink_y":
+                sink_metrics["sink_y"],
+
+            "sink_waypoint":
+                sink_metrics["sink_waypoint"],
+
+            "sink_movement_count":
+                sink_metrics["sink_movement_count"],
+
+            "sink_total_distance_m":
+                sink_metrics["sink_total_distance_m"],
+
+            "sink_last_move_round":
+                sink_metrics["sink_last_move_round"],
+
+            "sink_stress_alert":
+                sink_metrics["sink_stress_alert"],
+
+            "near_sink_overloaded_ratio":
+                sink_metrics["near_sink_overloaded_ratio"],
+
+            "near_sink_drain_ratio":
+                sink_metrics["near_sink_drain_ratio"],
+
+            "max_route_concentration":
+                sink_metrics["max_route_concentration"]
         }
 
     def print_summary(self) -> None:
